@@ -1,9 +1,10 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_google_genai import ChatGoogleGenerativeAI  # Or your LLM
+from langchain_google_genai import ChatGoogleGenerativeAI  
 import os
 from dotenv import load_dotenv
-from src.tools.calender_tools import get_calendar_events, create_calendar_event, update_calendar_event  # For tool binding
+from src.tools.calender_tools import get_calendar_events, create_calendar_event, update_calendar_event 
 from datetime import datetime
+
 load_dotenv()
 
 with open("src/prompts/calender_agent_prompt.txt", "r") as f:
