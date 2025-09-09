@@ -19,7 +19,7 @@ llm_with_tools = llm.bind_tools(tools= tools)
 
 
 tools_description = "\n".join([f"- {tool.name}: {tool.description}" for tool in tools])
-email_agent_prompt = ChatPromptTemplate.from_messages(
+calender_agent_prompt = ChatPromptTemplate.from_messages(
     [
         ("system", prompt_template_str),
         MessagesPlaceholder(variable_name="messages")
@@ -29,4 +29,4 @@ email_agent_prompt = ChatPromptTemplate.from_messages(
 
 
 
-email_agent_chain = email_agent_prompt | llm_with_tools  
+calendar_agent_chain = calender_agent_prompt | llm_with_tools  

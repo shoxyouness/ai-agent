@@ -1,6 +1,7 @@
 from src.agents.email_agent import app 
 from langchain_core.messages import HumanMessage
 from src.agents.email_agent import run_email_agent
+from src.agents.agent import run_agent
 # def run_email_agent():
 #     print("Email Agent is running. Type your request or 'exit' to quit.")
     
@@ -31,4 +32,4 @@ from src.agents.email_agent import run_email_agent
 #         print("\n\n--- Agent finished ---")
 
 if __name__ == "__main__":
-    run_email_agent()
+    run_agent()

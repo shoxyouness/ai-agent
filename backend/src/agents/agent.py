@@ -1,159 +1,76 @@
-import os
-from dotenv import load_dotenv
-
+from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages.tool import ToolCall
+import re
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import ToolMessage
-from langgraph.prebuilt import ToolNode
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
-# Import our custom components
-from src.tools.email_tools import get_unread_emails, send_email, reply_to_email, mark_email_as_read
-from src.tools.calender_tools import get_calendar_events, create_calendar_event, update_calendar_event
-
-from src.schema.email_agent_schema import AgentState
-from langchain_google_genai import ChatGoogleGenerativeAI
-from src.chains.email_agent_chain import email_agent_chain  # Existing email chain
-# NEW: Import or define specialized chains
-from src.chains.supervisor_chain import supervisor_chain  # To be created: Supervisor routing chain
-from src.chains.calendar_agent_chain import calendar_agent_chain  # To be created: Calendar-specific chain
-
-
+from dotenv import load_dotenv
+from langchain_core.tools import tool
+import asyncio
 load_dotenv()
 
-email_tools = [get_unread_emails, send_email, reply_to_email, mark_email_as_read]
-calendar_tools = [get_calendar_events, create_calendar_event, update_calendar_event]
+class Agent():
+    def __init__(self, name: str, llm, tools, description, main_task, process, notes):
+        self.name = name
+        self.llm = llm
+        self.tools = tools
+        self.description = description
+        self.main_task = main_task
+        self.process = process
+        self.notes = notes
+        
 
-def call_supervisor(state: AgentState):
-    """Supervisor analyzes messages and decides next step."""
-    messages = state["messages"]
-    response = supervisor_chain.invoke(messages)
-    return {"messages": [response]}
-
-
-def call_email_agent(state: AgentState):
-    """Email agent calls its chain."""
-    messages = state["messages"]
-    response = email_agent_chain.invoke(messages)
-    return {"messages": [response]}
-
-
-def call_calendar_agent(state: AgentState):
-    """Calendar agent calls its chain."""
-    messages = state["messages"]
-    response = calendar_agent_chain.invoke(messages)
-    return {"messages": [response]}
-
-
-email_tool_node = ToolNode(tools=email_tools)
-calendar_tool_node = ToolNode(tools=calendar_tools)
-
-
-
-# NEW: Supervisor routing logic
-def supervisor_should_route(state: AgentState) -> str:
-    """
-    Supervisor decides: route to email, calendar, both (sequential), or end.
-    Based on last message content (e.g., assume supervisor adds a 'route' key or uses content classification).
-    """
-    last_message = state["messages"][-1]
-    # Example: Parse supervisor's response for routing decision (e.g., if content starts with "EMAIL:", etc.)
-    # For simplicity, assume supervisor's response.content indicates route (customize based on your prompt)
-    if "email" in last_message.content.lower() and "calendar" in last_message.content.lower():
-        return "both"  # Sequential: email then calendar
-    elif "email" in last_message.content.lower():
-        return "email_agent"
-    elif "calendar" in last_message.content.lower():
-        return "calendar_agent"
-    elif last_message.tool_calls:
-        return "supervisor_tool"  # If supervisor needs tools (optional)
-    return "end"
-
-# Sub-agent continuation (similar to original)
-def sub_agent_should_continue(state: AgentState, agent_type: str) -> str:
-    last_message = state["messages"][-1]
-    if last_message.tool_calls:
-        return f"{agent_type}_tool"
-    return "back_to_supervisor"
-
-# --- 4. Assemble the Graph ---
-
-workflow = StateGraph(AgentState)
-
-# Add nodes
-workflow.add_node("supervisor", call_supervisor)
-workflow.add_node("email_agent", call_email_agent)
-workflow.add_node("calendar_agent", call_calendar_agent)
-workflow.add_node("email_tool", email_tool_node)
-workflow.add_node("calendar_tool", calendar_tool_node)
-
-# Entry point: Start with supervisor
-workflow.set_entry_point("supervisor")
-
-# Supervisor conditional edges
-workflow.add_conditional_edges(
-    "supervisor",
-    supervisor_should_route,
-    {
-        "email_agent": "email_agent",
-        "calendar_agent": "calendar_agent",
-        "both": "email_agent",  # Start sequence with email
-        "end": END
-    },
-)
-
-# Email agent edges
-workflow.add_conditional_edges(
-    "email_agent",
-    lambda state: sub_agent_should_continue(state, "email"),
-    {
-        "email_tool": "email_tool",
-        "back_to_supervisor": "supervisor"
-    },
-)
-workflow.add_edge("email_tool", "email_agent")  # Loop back to email agent
-
-# Calendar agent edges
-workflow.add_conditional_edges(
-    "calendar_agent",
-    lambda state: sub_agent_should_continue(state, "calendar"),
-    {
-        "calendar_tool": "calendar_tool",
-        "back_to_supervisor": "supervisor"
-    },
-)
-workflow.add_edge("calendar_tool", "calendar_agent")  # Loop back to calendar agent
-
-# For "both": After email, go to calendar
-workflow.add_conditional_edges(
-    "email_agent",  # Override for "both" flow
-    lambda state: "calendar_agent" if "both" in state.get("route", "") else sub_agent_should_continue(state, "email"),  # Track route in state if needed
-    {"calendar_agent": "calendar_agent", "email_tool": "email_tool", "back_to_supervisor": "supervisor"}
-)
-
-# Compile
-checkpointer = MemorySaver()
-app = workflow.compile(checkpointer=checkpointer)
-
-# --- Run Function (Minor Updates) ---
-
-def run_email_agent():
-    print("Multi-Agent Email System is running. Type your request or 'exit' to quit.")
+    async def __call__(self, state):
+        return await self.run(state)
+    async def ainvoke(self, state):
+        return await self.run(state)
     
-    thread_id = "multi_agent_thread"  # Unique per session
+
+    def create_prompt(self, state):
+        tool_descriptions = "\n".join([f"{tool.name}: {tool.description}" for tool in self.tools])
+        tool_calls = "\n".join([f"{tool.name}({{input}})" for tool in self.tools])
+        
+        prompt = f"""
+        You are {self.name}. Your main task is: {self.main_task}
+        Your process is as follows: {self.process}
+        Here are some additional notes about your behavior: {self.notes}
+        You have access to the following tools:
+        {tool_descriptions}
+        Only use the tools listed above. If you want to respond to the user, use the format:
+        AI: {{your response here}}
+        Here is the current conversation state:
+        {state}
+        """
+
+        return prompt.strip()
+
+    async def run(self, state):
+        prompt = self.create_prompt(state)
+        if self.tools:
+            self.llm.bind_tools(self.tools)
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+        else:
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+        content = response.content
+
+        return AIMessage(content=content)
     
-    while True:
-        user_input = input("You: ")
-        if user_input.lower() == 'exit':
-            break
-        
-        inputs = {"messages": [HumanMessage(content=user_input)]}
-        
-        print("\nSystem:")
-        config = {"configurable": {"thread_id": thread_id}}
-        agent_response = app.invoke(inputs, config=config)
-        
-        # Print final response (from supervisor or last agent)
-        print(agent_response["messages"][-1].content if "messages" in agent_response else agent_response)
-        
-        print("\n\n--- System finished ---")
+@tool
+def sum_numbers(numbers: list[int]) -> int:
+    """Sums a list of numbers."""
+    return sum(numbers)
+
+async def main():
+    agent  = Agent(
+        name="TestAgent", llm = ChatOpenAI(model="gpt-4o", temperature=0),
+        tools=[sum_numbers],
+        description="A test agent that can sum numbers.",
+        main_task="Sum a list of numbers provided by the user.",
+        process="1. Understand the user's request. 2. If it involves summing numbers, use the sum_numbers tool. 3. Provide the result to the user.",
+        notes="Be concise and clear in your responses."
+    )
+    response = await agent.ainvoke("User wants to sum the numbers 1, 2, and 3.")
+    print(response)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+    

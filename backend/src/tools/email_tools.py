@@ -4,14 +4,10 @@ from langchain.tools import tool
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from dotenv import load_dotenv
-
-# Import the get_access_token function from your ms_graph.py
 from src.utils.ms_graph import get_access_token, MS_GRAPH_BASE_URL
 from src.schema.email_agent_schema import Email
-
 from bs4 import BeautifulSoup
 
-# --- LangChain Tool Definition ---
 
 @tool
 def send_email(to: str, subject: str, body: str, cc: Optional[List[str]] = None, bcc: Optional[List[str]] = None) -> str:
@@ -143,9 +139,9 @@ def mark_email_as_read(message_id: str) -> str:
 
         return f"Email with ID {message_id} was successfully marked as read."
 
-    # --- THIS IS THE MODIFIED PART ---
+
     except requests.exceptions.HTTPError as e:
-        # Try to get the detailed error message from the JSON response
+        
         try:
             error_details = e.response.json()
             detailed_message = error_details.get('error', {}).get('message', 'No detailed message found.')
@@ -180,7 +176,6 @@ def get_unread_emails() -> List[dict]:
             'Content-Type': 'application/json'
         }
 
-        # 2. Change 'bodyPreview' to 'body' in the API call to get the full content.
         graph_url = f"{MS_GRAPH_BASE_URL}/me/mailFolders('inbox')/messages?$filter=isRead eq false&$top=10&$select=sender,subject,body,id"
         
         response = requests.get(graph_url, headers=headers)
@@ -198,20 +193,13 @@ def get_unread_emails() -> List[dict]:
             sender_name = sender_info.get('name', 'Unknown Sender')
             sender_address = sender_info.get('address', 'unknown@example.com')
 
-            # 3. Extract and clean the full HTML body
             full_body_html = message.get('body', {}).get('content', '')
-            # Use BeautifulSoup to convert HTML to clean plain text
             soup = BeautifulSoup(full_body_html, 'html.parser')
-            # Use a newline separator for better formatting of the plain text
             full_body_text = soup.get_text(separator='\n', strip=True)
-
-            # 4. Use the cleaned text. Note: Your Email Pydantic model uses 'body_preview'.
-            # We are putting the full text into this field. You might consider renaming
-            # the field in your `Email` schema to `body_content` for clarity.
             email_data = Email(
                 sender=f"{sender_name} <{sender_address}>",
                 subject=message.get('subject', 'No Subject'),
-                body_preview=full_body_text,  # Now contains the full, cleaned conversation
+                body_preview=full_body_text, 
                 message_id=message.get('id')
             )
             emails.append(email_data.model_dump())
