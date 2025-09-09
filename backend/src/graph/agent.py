@@ -1,9 +1,5 @@
 import os
 from dotenv import load_dotenv
-
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -11,25 +7,23 @@ from langgraph.checkpoint.memory import MemorySaver
 from src.tools.email_tools import get_unread_emails, send_email, reply_to_email, mark_email_as_read
 from src.tools.calender_tools import get_calendar_events, create_calendar_event, update_calendar_event
 from typing import Annotated, List
-from langchain_google_genai import ChatGoogleGenerativeAI
 from src.chains.email_agent_chain import email_agent_chain 
 from src.chains.supervisor_chain import supervisor_chain  # To be created: Supervisor routing chain
 from src.chains.calender_agent_chain import calendar_agent_chain  # Existing calendar chain
 from langgraph.graph import add_messages
 from langchain_core.messages import HumanMessage, AIMessage
+from typing import List, TypedDict
+from langchain_core.messages import BaseMessage
 load_dotenv()
 
 email_tools = [get_unread_emails, send_email, reply_to_email, mark_email_as_read]
 calendar_tools = [get_calendar_events, create_calendar_event, update_calendar_event]
 
 
-# src.schema.email_agent_schema.py
-from typing import List, TypedDict
-from langchain_core.messages import BaseMessage
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
-    route: str  # Add route field to track "both", "email", etc.
+    route: str  
     final_response: str  
 
 
@@ -40,7 +34,7 @@ def call_supervisor(state: AgentState):
 
     supervisor_ai_message = AIMessage(
         content=response.response, name = "Supervisor",
-        #
+        
     )
     return {"route": response.route.lower(), "messages": supervisor_ai_message}
 
@@ -60,26 +54,28 @@ def call_calendar_agent(state: AgentState):
 
 
 # Custom tool nodes to set name in ToolMessage
-def custom_tool_node(state: AgentState, tools: list):
-    messages = state["messages"]
-    last_message = messages[-1]
-    outputs = []
-    tool_map = {t.name: t for t in tools}
-    for tc in last_message.tool_calls:
-        tool = tool_map[tc["name"]]
-        output = tool.invoke(tc["args"])
-        outputs.append(ToolMessage(
-            content=str(output),
-            name=tc["name"],
-            tool_call_id=tc["id"],
-        ))
-    return {"messages": outputs}
+# def custom_tool_node(state: AgentState, tools: list):
+#     messages = state["messages"]
+#     last_message = messages[-1]
+#     outputs = []
+#     tool_map = {t.name: t for t in tools}
+#     for tc in last_message.tool_calls:
+#         tool = tool_map[tc["name"]]
+#         output = tool.invoke(tc["args"])
+#         outputs.append(ToolMessage(
+#             content=str(output),
+#             name=tc["name"],
+#             tool_call_id=tc["id"],
+#         ))
+#     return {"messages": outputs}
 
-def email_tool_node(state: AgentState):
-    return custom_tool_node(state, email_tools)
+email_tool_node = ToolNode(tools=email_tools)
+calendar_tool_node = ToolNode(tools=calendar_tools)
+# def email_tool_node(state: AgentState):
+#     return custom_tool_node(state, email_tools)
 
-def calendar_tool_node(state: AgentState):
-    return custom_tool_node(state, calendar_tools)
+# def calendar_tool_node(state: AgentState):
+#     return custom_tool_node(state, calendar_tools)
 
 
 def supervisor_should_route(state: AgentState) -> str:
@@ -111,18 +107,16 @@ def sub_agent_should_continue(state: AgentState, agent_type: str) -> str:
     print("Returning back_to_supervisor")
     return "back_to_supervisor"
 
-# --- 4. Assemble the Graph ---
 
 workflow = StateGraph(AgentState)
 
-# Add nodes
 workflow.add_node("supervisor", call_supervisor)
 workflow.add_node("email_agent", call_email_agent)
 workflow.add_node("calendar_agent", call_calendar_agent)
 workflow.add_node("email_tool", email_tool_node)
 workflow.add_node("calendar_tool", calendar_tool_node)
 
-# Entry point: Start with supervisor
+
 workflow.set_entry_point("supervisor")
 
 # Supervisor conditional edges
@@ -192,3 +186,6 @@ def run_agent():
         print(agent_response["messages"][-1].content if "messages" in agent_response else agent_response)
         
         print("\n\n--- System finished ---")
+
+if __name__ == "__main__":
+    run_agent()

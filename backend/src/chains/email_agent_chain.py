@@ -4,7 +4,6 @@ from langchain_openai import ChatOpenAI
 import os
 from dotenv import load_dotenv
 from src.tools.email_tools import get_unread_emails, send_email, reply_to_email, mark_email_as_read # For tool binding
-from src.tools.calender_tools import get_calendar_events, create_calendar_event, update_calendar_event  # For tool binding
 from datetime import datetime
 load_dotenv()
 
@@ -13,7 +12,7 @@ with open("src/prompts/email_agent_prompt.txt", "r") as f:
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0, api_key=os.getenv("GEMINI_API_KEY"))
 # llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=os.getenv("OPENAI_API_KEY")) 
-tools = [get_unread_emails, send_email, reply_to_email, mark_email_as_read, get_calendar_events, create_calendar_event, update_calendar_event]
+tools = [get_unread_emails, send_email, reply_to_email, mark_email_as_read]
 
 
 # tools = [get_unread_emails, send_email, reply_to_email, mark_email_as_read]

@@ -8,11 +8,10 @@ from typing import Literal
 load_dotenv()
 
 class Supervisor(BaseModel):
-    route: Literal["email_agent", "calendar_agent", "both", "none"] = Field(
+    route: Literal["email_agent", "calendar_agent", "none"] = Field(
         description="Determines which specialist to activate next in the workflow sequence:"
         "'email_agent' when the task is primarily email-related, "
         "'calendar_agent' when the task is primarily calendar-related,"
-        "'both' when both agents are needed for the task,"
         "'none' if the task does not require any agent."
     )
     response: str = Field(
