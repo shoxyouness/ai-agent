@@ -12,7 +12,7 @@ from src.tools.email_tools import get_unread_emails, send_email, reply_to_email,
 from src.tools.calender_tools import get_calendar_events, create_calendar_event, update_calendar_event
 from typing import Annotated, List
 from langchain_google_genai import ChatGoogleGenerativeAI
-from src.chains.email_agent_chain import email_agent_chain  # Existing email chain
+from src.chains.outlook_agent_chain import email_agent_chain  # Existing email chain
 # NEW: Import or define specialized chains
 from src.chains.supervisor_chain import supervisor_chain  # To be created: Supervisor routing chain
 from src.chains.calender_agent_chain import calendar_agent_chain  # Existing calendar chain

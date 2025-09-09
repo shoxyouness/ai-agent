@@ -7,17 +7,16 @@ from langgraph.checkpoint.memory import MemorySaver
 from src.tools.email_tools import get_unread_emails, send_email, reply_to_email, mark_email_as_read
 from src.tools.calender_tools import get_calendar_events, create_calendar_event, update_calendar_event
 from src.schema.email_agent_schema import AgentState
-from src.chains.email_agent_chain import email_agent_chain
+from src.chains.outlook_agent_chain import outlook_agent_chain
 from langchain_core.messages import HumanMessage
-
+import pprint
 load_dotenv()
 
 
 def call_model(state: AgentState):
     """The primary node that calls the LLM."""
     messages = state["messages"]
-    # invoke erwartet ein einziges Input-Objekt, meist ein Dict.
-    response = email_agent_chain.invoke({"messages": messages})
+    response = outlook_agent_chain.invoke({"messages": messages})
     return {"messages": [response]}
 
 
@@ -56,10 +55,10 @@ checkpointer = MemorySaver()
 app = workflow.compile(checkpointer=checkpointer)  
 
 
-def run_email_agent():
-    print("Email Agent is running. Type your request or 'exit' to quit.")
+def run_outlook_agent():
+    print("Outlook Agent is running. Type your request or 'exit' to quit.")
     
-    thread_id = "email_thread"  
+    thread_id = "outlook_thread"  
     
     while True:
         user_input = input("You: ")
@@ -72,7 +71,12 @@ def run_email_agent():
         config = {"configurable": {"thread_id": thread_id}}  
         agent_response = app.invoke(input=inputs, config=config)
         print("==========================================================")
+        snapshot = app.get_state(config=config)
+        print("STATE VALUES:")
+        pprint.pprint(snapshot.values)
+        print("NEXT:", snapshot.next)  
         print("==========================================================")
+
 
         
         print(agent_response["messages"][-1].content if "messages" in agent_response else agent_response)
@@ -80,4 +84,4 @@ def run_email_agent():
         print("\n\n--- Agent finished ---")
 
 if __name__ == "__main__":
-    run_email_agent()
+    run_outlook_agent()
