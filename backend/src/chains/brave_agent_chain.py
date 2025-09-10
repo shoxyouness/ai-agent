@@ -1,5 +1,4 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_google_genai import ChatGoogleGenerativeAI
 import os
 from dotenv import load_dotenv
 from datetime import datetime

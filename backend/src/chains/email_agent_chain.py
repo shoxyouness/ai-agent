@@ -1,6 +1,4 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_google_genai import ChatGoogleGenerativeAI  # Or your LLM
-from langchain_openai import ChatOpenAI
 import os
 from dotenv import load_dotenv
 from src.tools.email_tools import get_unread_emails, send_email, reply_to_email, mark_email_as_read # For tool binding

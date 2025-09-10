@@ -11,13 +11,15 @@ from src.schema.multi_agent_schema import MultiAgentState
 from src.chains.email_agent_chain import email_agent_chain
 from src.chains.calender_agent_chain import calendar_agent_chain  
 from src.chains.supervisor_chain import supervisor_chain
+from src.chains.sheet_agent_chain import sheet_agent_chain
 from langchain_core.messages import HumanMessage, AIMessage
+from src.tools.sheet_tools import GOOGLE_SHEETS_CONTACT_TOOLS
 
 from pprint import pprint
 
 email_tools = [get_unread_emails, send_email, reply_to_email, mark_email_as_read]
 calendar_tools = [get_calendar_events, create_calendar_event, update_calendar_event]
-
+sheet_tools =GOOGLE_SHEETS_CONTACT_TOOLS
 def call_supervisor(state: MultiAgentState):
     """Supervisor analyzes messages and decides next step."""
     messages = state["messages"]
@@ -46,12 +48,20 @@ def call_calendar_agent(state: MultiAgentState):
     response = calendar_agent_chain.invoke(messages)
     return {"messages": [response]}
 
+
+def call_sheet_agent(state:MultiAgentState):
+    """Sheet agent calls its chain."""
+    messages = state["messages"]
+    response = sheet_agent_chain.invoke(messages)
+
+    return {"messages":[response]}
+
 email_tool_node = ToolNode(tools = email_tools)
 calendar_tool_node = ToolNode(tools = calendar_tools)
-
+sheet_tool_node = ToolNode(tools = sheet_tools)
 EMAIL_TOOL_NAMES = {t.name.lower() for t in email_tools}
 CAL_TOOL_NAMES   = {t.name.lower() for t in calendar_tools}
-
+SHEET_TOOL_NAMES = {t.name.lower() for t in sheet_tools}
 def _get_tc_name(tc) -> str:
     # Works for dicts or objects; returns lowercased name or ""
     if isinstance(tc, dict):
@@ -72,6 +82,8 @@ def sub_agent_should_continue(state: MultiAgentState) -> str:
         return "to_email_tool"
     if last_tc_name in CAL_TOOL_NAMES:
         return "to_calendar_tool"
+    if last_tc_name in SHEET_TOOL_NAMES:
+        return "to_sheet_tool"
     return "back_to_supervisor"
 
 
@@ -79,8 +91,13 @@ def supervisor_agent_should_continue(state: MultiAgentState) -> str:
     route = state["route"]
     if route == "email_agent":
         return "to_email_agent"
+    
     elif route == "calendar_agent":
         return "to_calendar_agent"
+    
+    elif route == "sheet_agent":
+        return "to_sheet_agent"
+    
     return "end"
 
 graph = StateGraph(MultiAgentState)
@@ -89,8 +106,11 @@ graph.set_entry_point("supervisor")
 graph.add_node("supervisor", call_supervisor)
 graph.add_node("email_agent", call_email_agent)
 graph.add_node("calendar_agent", call_calendar_agent)
+graph.add_node("sheet_agent", call_sheet_agent)
 graph.add_node("email_tool_node", email_tool_node)
 graph.add_node("calendar_tool_node", calendar_tool_node)
+graph.add_node("sheet_tool_node", sheet_tool_node)
+
 
 
 graph.add_conditional_edges(
@@ -99,6 +119,7 @@ graph.add_conditional_edges(
     {
         "to_email_agent": "email_agent",
         "to_calendar_agent": "calendar_agent",
+        "to_sheet_agent":"sheet_agent",
         "end": END
     },
 )
@@ -118,8 +139,17 @@ graph.add_conditional_edges(
         "to_calendar_tool": "calendar_tool_node",
         "back_to_supervisor": "supervisor"
     }, ) 
+graph.add_conditional_edges(
+    "sheet_agent",
+    sub_agent_should_continue,
+    {
+        "to_sheet_tool": "sheet_tool_node",
+        "back_to_supervisor": "supervisor"
+    }, ) 
+
 graph.add_edge("email_tool_node", "email_agent")
 graph.add_edge("calendar_tool_node", "calendar_agent")
+graph.add_edge("sheet_tool_node", "sheet_agent")
 
 
 checkpointer = MemorySaver()
