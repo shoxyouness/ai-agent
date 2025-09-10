@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 from pydantic import BaseModel, Field
 from typing import Literal
+from src.config.llm import llm_client
 load_dotenv()
 
 class Supervisor(BaseModel):
@@ -25,7 +26,7 @@ class Supervisor(BaseModel):
 with open("src/prompts/supervisor_agent_prompt.txt", "r") as f:
     prompt_template_str = f.read()
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0, api_key=os.getenv("GEMINI_API_KEY"))
+# llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0, api_key=os.getenv("GEMINI_API_KEY"))
 
 supervisor_agent_prompt = ChatPromptTemplate.from_messages(
     [
@@ -36,4 +37,4 @@ supervisor_agent_prompt = ChatPromptTemplate.from_messages(
      current_date_time=datetime.now().strftime("%I:%M %p %Z, %A, %B %d, %Y")
 )
 
-supervisor_chain = supervisor_agent_prompt | llm.with_structured_output(Supervisor)
+supervisor_chain = supervisor_agent_prompt | llm_client.with_structured_output(Supervisor)

@@ -11,7 +11,7 @@ from src.schema.multi_agent_schema import MultiAgentState
 from src.chains.email_agent_chain import email_agent_chain
 from src.chains.calender_agent_chain import calendar_agent_chain  
 from src.chains.supervisor_chain import supervisor_chain
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage
 
 from pprint import pprint
 
@@ -110,6 +110,7 @@ graph.add_conditional_edges(
         "back_to_supervisor": "supervisor"
     },
 )
+
 graph.add_conditional_edges(
     "calendar_agent",
     sub_agent_should_continue,
@@ -146,9 +147,6 @@ def run_multi_agent():
         pprint(snapshot.values)
         print("NEXT:", snapshot.next)  
         print("==========================================================")
-
-
-        
         print(agent_response["messages"][-1].content if "messages" in agent_response else agent_response)
 if __name__ == "__main__": 
     run_multi_agent()

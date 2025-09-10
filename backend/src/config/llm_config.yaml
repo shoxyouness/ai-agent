@@ -1,14 +1,15 @@
-
 openai:
   api_key: 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
   api_base: https://api.openai.com/v1
   defualt_model: gpt-4o
   max_tokens: 8192
+
 anthropic:
   api_key: ${ANTHROPIC_API_KEY}
   api_base: https://api.anthropic.com/v1
   default_model: claude-3-5-sonnet-20241022
   max_tokens: 8192
+
 google:
   api_key: ${GOOGLE_API_KEY}
   api_base: https://generativelanguage.googleapis.com/v1beta
