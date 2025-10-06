@@ -143,3 +143,18 @@ async def browser_tab_new(url: Optional[str] = None):
 async def browser_tab_select(index: int):
     """Select/switch to a tab by zero-based index. Requires the server to run with --caps=tabs."""
     return await _call("browser_tab_select", {"index": index})
+
+
+# Export all tools for easy import
+BRAVE_BROWSER_TOOLS = [
+    browser_navigate,
+    browser_snapshot,
+    browser_click,
+    browser_type,
+    browser_evaluate,
+    browser_take_screenshot,
+    browser_navigate_back,
+    browser_navigate_forward,
+    browser_tab_new,
+    browser_tab_select,
+]
