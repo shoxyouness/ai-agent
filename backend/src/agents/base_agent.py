@@ -6,6 +6,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from datetime import datetime
 from pathlib import Path
+from pydantic import BaseModel
 
 class BaseAgent(ABC):
     """
@@ -25,6 +26,7 @@ class BaseAgent(ABC):
         prompt_file: Optional[str] = None,
         temperature: float = 0.0,
         system_context: Optional[Dict[str, Any]] = None,
+        structured_output: Optional[BaseModel] = None,
     ):
         """
         Args:
@@ -42,6 +44,7 @@ class BaseAgent(ABC):
         self._prompt_file = prompt_file  # keep private; might be None
         self.temperature = temperature
         self.system_context = system_context or {}
+        self.structured_output = structured_output
 
         # Resolve the prompt template (string)
         self.prompt_template_str = self._resolve_prompt(prompt, prompt_file)
@@ -119,7 +122,9 @@ class BaseAgent(ABC):
             agent_name=self.name,
             **self.system_context,
         )
-
+        if self.structured_output:
+            return prompt | llm_with_tools.with_structured_output(self.structured_output)
+        
         return prompt | llm_with_tools
 
     def _get_current_datetime(self) -> str:
