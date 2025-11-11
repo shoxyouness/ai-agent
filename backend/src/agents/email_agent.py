@@ -59,6 +59,7 @@ Example:
    Ensure summaries and emails are actionable, relevant, and concise.
    Use user.name and user.signature for personalization.
    After completing, end your output with "Task complete—return to supervisor."
+   
    Current Date and Time: {current_date_time}
    Time Zone: Europe/Berlin
    Process email tasks as routed!

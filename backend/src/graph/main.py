@@ -12,7 +12,6 @@ from pprint import pprint
 import json
 from langchain_core.messages import AIMessage, ToolMessage
 
-# Import BaseAgent and concrete agent classes
 from src.agents import (
     EmailAgent,
     CalendarAgent,
@@ -24,7 +23,6 @@ from src.agents import (
 from src.tools.email_tools import get_unread_emails, send_email, reply_to_email, mark_email_as_read
 from src.tools.calender_tools import get_calendar_events, create_calendar_event, update_calendar_event
 from src.tools.sheet_tools import GOOGLE_SHEETS_CONTACT_TOOLS
-from src.tools.memory_tools import MEMORY_TOOLS
 from src.schema.multi_agent_schema import MultiAgentState
 from src.config.llm import llm_client
 
@@ -40,108 +38,107 @@ calendar_tools = [get_calendar_events, create_calendar_event, update_calendar_ev
 sheet_tools = GOOGLE_SHEETS_CONTACT_TOOLS
 
 # Create agent instances
+supervisor_agent = SupervisorAgent(llm=llm_client) 
 email_agent = EmailAgent(llm=llm_client, tools=email_tools)
 calendar_agent = CalendarAgent(llm=llm_client, tools=calendar_tools)
 sheet_agent = SheetAgent(llm=llm_client, tools=sheet_tools)
-supervisor_agent = SupervisorAgent(llm=llm_client,tools =[] )
 
+
+print(f"✓ Initialized {supervisor_agent.name}")
 print(f"✓ Initialized {email_agent.name} with {len(email_agent.tools)} tools")
 print(f"✓ Initialized {calendar_agent.name} with {len(calendar_agent.tools)} tools")
 print(f"✓ Initialized {sheet_agent.name} with {len(sheet_agent.tools)} tools")
-print(f"✓ Initialized {supervisor_agent.name}")
 
 
-# ============================================================
-# Step 2: Define node functions using BaseAgent instances
-# ============================================================
-
-
-def call_supervisor(state: "MultiAgentState"):
-    """
-    Supervisor analyzes messages and decides the next step.
-    Handles both JSON outputs and tool call invocations.
-    """
+def call_supervisor(state: MultiAgentState):
+    """Supervisor analyzes messages and decides next step."""
     messages = state["messages"]
+  
+    response = supervisor_agent.invoke(messages )
 
-    response = supervisor_agent.invoke(messages)
-    print(response) 
-
-    if getattr(response, "tool_calls", None):
-        print("🧩 Supervisor issued tool calls:", response.tool_calls)
-        supervisor_ai_message = AIMessage(
-            content=response.content or "",
-            name="Supervisor",
-            tool_calls=response.tool_calls,
-        )
-        return {
-            "messages":[supervisor_ai_message],
-        }
-
-    raw_content = (response.content or "").strip()
-    route = "none"
-    thoughts = ""
-    user_response = ""
-
-    if raw_content:
-        try:
-            parsed = json.loads(raw_content)
-            route = parsed.get("route", "none").lower()
-            thoughts = parsed.get("thoughts", "")
-            user_response = parsed.get("response", "")
-        except json.JSONDecodeError:
-            print("⚠️ Supervisor returned non-JSON output:", raw_content)
-            thoughts = "Failed to parse JSON response."
-            user_response = raw_content
-
-    else:
-        print("⚠️ Supervisor returned empty content.")
-        user_response = "I'm sorry, I couldn't generate a response."
-
-    print("=========================================================")
-    print(f"Supervisor decision: {route}")
-    print("Thoughts:", thoughts)
-    print("=========================================================")
-
-    # Build message
     supervisor_ai_message = AIMessage(
-        content=user_response,
-        name="Supervisor"
-    )
+        content=response.response, name = "Supervisor",
 
-    return {
-        "route": route,
-        "messages": state["messages"] + [supervisor_ai_message],
-    }
+    )
+    print("=========================================================")
+    print("Supervisor thoughts:", response.thoughts)
+    print("=========================================================")
+
+    print("=========================================================")
+    print("Supervisor decision:", response.route)
+    print("=========================================================")
+    message_to_next_agent = None
+    if response.route != "none":
+        message_to_next_agent = HumanMessage(content=response.message_to_next_agent, name = "Supervisor")
+
+    return {"route": response.route.lower(), "messages": supervisor_ai_message,"supervisor_response": response.response, "message_to_next_agent": message_to_next_agent}
+
 
 
 def call_email_agent(state: MultiAgentState):
-    """Email agent calls its chain."""
-    messages = state["messages"]
-    
-    response = email_agent.invoke(messages)
-    
-    return {"messages": [response]}
+    email_history = state.get("email_messages", [])
+    next_msg = state.get("message_to_next_agent")
 
+    if next_msg is None:
+        next_msg = state["messages"][-1]
 
+    input_msgs = email_history + [next_msg]
+    response = email_agent.invoke(input_msgs)
+
+    return {
+        "messages": state["messages"] + [response],
+        "email_messages": email_history + [next_msg, response],
+        "email_agent_response": response.content,
+        "message_to_next_agent": None, 
+    }
 def call_calendar_agent(state: MultiAgentState):
-    """Calendar agent calls its chain."""
-    messages = state["messages"]
-    
-    # Use the calendar agent's invoke method
-    response = calendar_agent.invoke(messages)
-    
-    return {"messages": [response]}
+    cal_history = state.get("calendar_messages", [])
+    next_msg = state.get("message_to_next_agent")
 
+    if next_msg is None:
+        next_msg = state["messages"][-1]
+
+    print("Calling calendar agent with:", next_msg)
+
+    input_msgs = cal_history + [next_msg]
+    response = calendar_agent.invoke(input_msgs)
+
+
+    return {
+        "messages": state["messages"] + [response],
+        "calendar_messages": cal_history + [next_msg, response],
+        "calendar_agent_response": response.content,
+        "message_to_next_agent": None,
+    }
 
 def call_sheet_agent(state: MultiAgentState):
-    """Sheet agent calls its chain."""
-    messages = state["messages"]
-    
-    # Use the sheet agent's invoke method
-    response = sheet_agent.invoke(messages)
+    sheet_history = state.get("sheet_messages", [])
+    next_msg = state.get("message_to_next_agent")
 
-    return {"messages": [response]}
+    if next_msg is None:
+        next_msg = state["messages"][-1]
 
+    print("Calling sheet agent with:", next_msg)
+
+    input_msgs = sheet_history + [next_msg]
+    response = sheet_agent.invoke(input_msgs)
+
+
+    return {
+        "messages": state["messages"] + [response],
+        "sheet_messages": sheet_history + [next_msg, response],
+        "sheet_agent_response": response.content,
+        "message_to_next_agent": None,
+    }
+
+def clear_sub_agents_state(state: MultiAgentState):
+    """Clear sub-agent specific messages from state."""
+    return {
+        "email_messages": [],
+        "calendar_messages": [],
+        "sheet_messages": [],
+        "message_to_next_agent": None,
+    }
 
 # ============================================================
 # Step 3: Create tool nodes (no changes needed)
@@ -150,12 +147,11 @@ def call_sheet_agent(state: MultiAgentState):
 email_tool_node = ToolNode(tools=email_tools)
 calendar_tool_node = ToolNode(tools=calendar_tools)
 sheet_tool_node = ToolNode(tools=sheet_tools)
-memory_tool_node = ToolNode(tools=MEMORY_TOOLS)
+
 # Create tool name sets for routing
 EMAIL_TOOL_NAMES = {t.name.lower() for t in email_tools}
 CAL_TOOL_NAMES = {t.name.lower() for t in calendar_tools}
 SHEET_TOOL_NAMES = {t.name.lower() for t in sheet_tools}
-MEMORY_TOOL_NAMES = {t.name.lower() for t in MEMORY_TOOLS}
 
 # ============================================================
 # Step 4: Define routing functions (no changes needed)
@@ -198,27 +194,9 @@ def sub_agent_should_continue(state: MultiAgentState) -> str:
 
 
 def supervisor_agent_should_continue(state: "MultiAgentState") -> str:
-    """
-    Determine which agent the supervisor should route to next.
-    - If the last message is a tool call → route to 'tool_node'
-    - Otherwise → use the 'route' field set by the supervisor.
-    """
-    messages = state.get("messages") or []
+
     route = state.get("route", "none")
 
-    # --- Check if the last message involves a tool call ---
-    if messages:
-        last_msg = messages[-1]
-
-        # Case 1: LLM initiated a tool call (AIMessage with tool_calls)
-        if isinstance(last_msg, AIMessage) and getattr(last_msg, "tool_calls") and last_msg.tool_calls > 0:
-            return "to_memory_tools"
-
-        # Case 2: Tool message explicitly present
-        if isinstance(last_msg, ToolMessage):
-            return "to_memory_tools"
-
-    # --- Otherwise use supervisor’s routing decision ---
     if route == "email_agent":
         return "to_email_agent"
     elif route == "calendar_agent":
@@ -245,8 +223,7 @@ graph.add_node("sheet_agent", call_sheet_agent)
 graph.add_node("email_tool_node", email_tool_node)
 graph.add_node("calendar_tool_node", calendar_tool_node)
 graph.add_node("sheet_tool_node", sheet_tool_node)
-graph.add_node("memory_tool_node", memory_tool_node)
-
+graph.add_node("clear_state", clear_sub_agents_state)
 # Supervisor conditional edges
 graph.add_conditional_edges(
     "supervisor",
@@ -255,7 +232,6 @@ graph.add_conditional_edges(
         "to_email_agent": "email_agent",
         "to_calendar_agent": "calendar_agent",
         "to_sheet_agent": "sheet_agent",
-        "to_memory_tools": "memory_tool_node",
         "end": END
     },
 )
@@ -266,7 +242,7 @@ graph.add_conditional_edges(
     sub_agent_should_continue,
     {
         "to_email_tool": "email_tool_node",
-        "back_to_supervisor": "supervisor"
+        "back_to_supervisor": "clear_state"
     },
 )
 
@@ -276,7 +252,7 @@ graph.add_conditional_edges(
     sub_agent_should_continue,
     {
         "to_calendar_tool": "calendar_tool_node",
-        "back_to_supervisor": "supervisor"
+        "back_to_supervisor": "clear_state"
     },
 )
 
@@ -286,15 +262,17 @@ graph.add_conditional_edges(
     sub_agent_should_continue,
     {
         "to_sheet_tool": "sheet_tool_node",
-        "back_to_supervisor": "supervisor"
+        "back_to_supervisor": "clear_state"
     },
 )
 
 # Tool nodes back to their respective agents
+
 graph.add_edge("email_tool_node", "email_agent")
 graph.add_edge("calendar_tool_node", "calendar_agent")
 graph.add_edge("sheet_tool_node", "sheet_agent")
-graph.add_edge("memory_tool_node", "supervisor")
+
+graph.add_edge("clear_state", "supervisor")
 
 # Compile the graph
 checkpointer = MemorySaver()
@@ -341,21 +319,35 @@ def run_multi_agent():
         
         try:
             agent_response = app.invoke(input=inputs, config=config)
-            
+
             print("==========================================================")
             snapshot = app.get_state(config=config)
             print("STATE VALUES:")
             pprint(snapshot.values)
-            print("NEXT:", snapshot.next)  
+            print("NEXT:", snapshot.next)
             print("==========================================================")
-            
-            # Print final response
+
+            # --- 1️⃣ Extract Supervisor response if available ---
+            supervisor_response = None
+            # Case A: it was returned explicitly by supervisor node
+            if "supervisor_response" in agent_response:
+                supervisor_response = agent_response["supervisor_response"]
+            # Case B: still in state memory
+            elif "supervisor_response" in snapshot.values:
+                supervisor_response = snapshot.values["supervisor_response"]
+
+            if supervisor_response:
+                print("\n🧠 SUPERVISOR RESPONSE:\n" + "-" * 50)
+                print(supervisor_response)
+                print("-" * 50 + "\n")
+
+            # --- 2️⃣ Then show final output message (user-facing summary) ---
             if "messages" in agent_response and agent_response["messages"]:
                 final_message = agent_response["messages"][-1]
-                print(f"\n{final_message.content}\n")
+                print(f"\n💬 FINAL AGENT OUTPUT:\n{final_message.content}\n")
             else:
-                print(f"\n{agent_response}\n")
-                
+                print(f"\n💬 FINAL AGENT OUTPUT:\n{agent_response}\n")
+
         except Exception as e:
             print(f"\n❌ Error: {str(e)}\n")
             import traceback
