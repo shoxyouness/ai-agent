@@ -1,8 +1,3 @@
-# backend/src/graph/multi_agent.py
-"""
-Multi-agent graph refactored to use BaseAgent.
-"""
-
 from dotenv import load_dotenv
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, END
@@ -13,48 +8,73 @@ import json
 from langchain_core.messages import AIMessage, ToolMessage
 
 from src.agents import (
-    EmailAgent,
-    CalendarAgent,
-    SheetAgent,
-    SupervisorAgent,
+    email_agent,
+    calendar_agent,
+    sheet_agent,
+    supervisor_agent,
+    memory_agent,
 )
 
-# Import tools
-from src.tools.email_tools import get_unread_emails, send_email, reply_to_email, mark_email_as_read
-from src.tools.calender_tools import get_calendar_events, create_calendar_event, update_calendar_event
-from src.tools.sheet_tools import GOOGLE_SHEETS_CONTACT_TOOLS
 from src.schema.multi_agent_schema import MultiAgentState
-from src.config.llm import llm_client
+# TODO
+from src.tools.memory_tools import search_memory
 
 load_dotenv()
 
-# ============================================================
-# Step 1: Initialize agents using BaseAgent
-# ============================================================
-
-# Define tool lists
-email_tools = [get_unread_emails, send_email, reply_to_email, mark_email_as_read]
-calendar_tools = [get_calendar_events, create_calendar_event, update_calendar_event]
-sheet_tools = GOOGLE_SHEETS_CONTACT_TOOLS
-
-# Create agent instances
-supervisor_agent = SupervisorAgent(llm=llm_client) 
-email_agent = EmailAgent(llm=llm_client, tools=email_tools)
-calendar_agent = CalendarAgent(llm=llm_client, tools=calendar_tools)
-sheet_agent = SheetAgent(llm=llm_client, tools=sheet_tools)
-
+email_tools =email_agent.tools
+calendar_tools = calendar_agent.tools
+sheet_tools = sheet_agent.tools
+memory_tools = memory_agent.tools
 
 print(f"✓ Initialized {supervisor_agent.name}")
 print(f"✓ Initialized {email_agent.name} with {len(email_agent.tools)} tools")
 print(f"✓ Initialized {calendar_agent.name} with {len(calendar_agent.tools)} tools")
 print(f"✓ Initialized {sheet_agent.name} with {len(sheet_agent.tools)} tools")
 
+# ============================================================
+# Step 2: Define agent call functions
+# ============================================================
+
+def retrieve_memory(state: MultiAgentState):
+    """Retrieve relevant memories based on the current user message."""
+    current_user_message = state["messages"][-1].content
+
+    retrieved_memory =  search_memory.invoke({"query": current_user_message, "limit": 1, "more": True})
+
+    return {"retrieved_memory": retrieved_memory, "current_user_message": current_user_message}
+def call_memory_agent(state: MultiAgentState):
+    """Memory agent to manage long-term memory operations."""
+    
+    memory_history = state.get("memory_messages", [])
+    
+    next_msg = state.get("message_to_next_agent")
+    if next_msg is None:
+        next_msg = state["messages"][-1]
+    
+    retrieved_memory_context=state.get("retrieved_memory", "No relevant Context found.")
+    input_msgs = memory_history + [next_msg]
+
+    response = memory_agent.invoke(messages=input_msgs,retrieved_memory_context= retrieved_memory_context, user_message=next_msg.content) 
+    
+    print("=========================================================")
+    print("Memory Agent Output:", response.content)
+    print("=========================================================")
+
+    # Append the input and the response to the agent's internal history
+    new_memory_messages = [next_msg, response]
+    
+    return {
+        "messages": [response], # Append agent response to main thread
+        "memory_messages": new_memory_messages, # Update the internal memory loop history
+        "memory_agent_response": response.content,
+        "message_to_next_agent": None,
+    }
 
 def call_supervisor(state: MultiAgentState):
     """Supervisor analyzes messages and decides next step."""
     messages = state["messages"]
-  
-    response = supervisor_agent.invoke(messages )
+    retrieved_memory_context = state.get("retrieved_memory", "No relevant Context found.")
+    response = supervisor_agent.invoke(messages = messages ,retrieved_memory=retrieved_memory_context)
 
     supervisor_ai_message = AIMessage(
         content=response.response, name = "Supervisor",
@@ -71,9 +91,7 @@ def call_supervisor(state: MultiAgentState):
     if response.route != "none":
         message_to_next_agent = HumanMessage(content=response.message_to_next_agent, name = "Supervisor")
 
-    return {"route": response.route.lower(), "messages": supervisor_ai_message,"supervisor_response": response.response, "message_to_next_agent": message_to_next_agent}
-
-
+    return {"route": response.route.lower(), "messages": [supervisor_ai_message],"supervisor_response": response.response, "message_to_next_agent": message_to_next_agent}
 
 def call_email_agent(state: MultiAgentState):
     email_history = state.get("email_messages", [])
@@ -89,7 +107,7 @@ def call_email_agent(state: MultiAgentState):
         "messages": state["messages"] + [response],
         "email_messages": email_history + [next_msg, response],
         "email_agent_response": response.content,
-        "message_to_next_agent": None, 
+        "message_to_next_agent": None,
     }
 def call_calendar_agent(state: MultiAgentState):
     cal_history = state.get("calendar_messages", [])
@@ -110,7 +128,6 @@ def call_calendar_agent(state: MultiAgentState):
         "calendar_agent_response": response.content,
         "message_to_next_agent": None,
     }
-
 def call_sheet_agent(state: MultiAgentState):
     sheet_history = state.get("sheet_messages", [])
     next_msg = state.get("message_to_next_agent")
@@ -130,7 +147,6 @@ def call_sheet_agent(state: MultiAgentState):
         "sheet_agent_response": response.content,
         "message_to_next_agent": None,
     }
-
 def clear_sub_agents_state(state: MultiAgentState):
     """Clear sub-agent specific messages from state."""
     return {
@@ -140,6 +156,7 @@ def clear_sub_agents_state(state: MultiAgentState):
         "message_to_next_agent": None,
     }
 
+
 # ============================================================
 # Step 3: Create tool nodes (no changes needed)
 # ============================================================
@@ -147,12 +164,12 @@ def clear_sub_agents_state(state: MultiAgentState):
 email_tool_node = ToolNode(tools=email_tools)
 calendar_tool_node = ToolNode(tools=calendar_tools)
 sheet_tool_node = ToolNode(tools=sheet_tools)
-
+memory_tool_node = ToolNode(tools=memory_tools)
 # Create tool name sets for routing
 EMAIL_TOOL_NAMES = {t.name.lower() for t in email_tools}
 CAL_TOOL_NAMES = {t.name.lower() for t in calendar_tools}
 SHEET_TOOL_NAMES = {t.name.lower() for t in sheet_tools}
-
+MEMORY_TOOL_NAMES = {t.name.lower() for t in memory_tools}
 # ============================================================
 # Step 4: Define routing functions (no changes needed)
 # ============================================================
@@ -192,7 +209,27 @@ def sub_agent_should_continue(state: MultiAgentState) -> str:
     return "back_to_supervisor"
 
 
-
+def memory_agent_should_continue(state: MultiAgentState) -> str:
+    """
+    Determine if memory agent should call tools or return to supervisor.
+    """
+    msgs = state.get("messages") or []
+    if not msgs:
+        return "end"
+    
+    last = msgs[-1]
+    tcs = getattr(last, "tool_calls", None) or []
+    
+    if not tcs:
+        return "end"
+    
+    last_tc_name = _get_tc_name(tcs[-1])
+    print(f"[router] last tool call: {last_tc_name}")
+    
+    if last_tc_name in MEMORY_TOOL_NAMES:
+        return "to_memory_tool"
+    
+    return "end"
 def supervisor_agent_should_continue(state: "MultiAgentState") -> str:
 
     route = state.get("route", "none")
@@ -213,9 +250,10 @@ def supervisor_agent_should_continue(state: "MultiAgentState") -> str:
 graph = StateGraph(MultiAgentState)
 
 # Set entry point
-graph.set_entry_point("supervisor")
+graph.set_entry_point("retrieve_memory")
 
 # Add nodes
+graph.add_node("retrieve_memory", retrieve_memory)
 graph.add_node("supervisor", call_supervisor)
 graph.add_node("email_agent", call_email_agent)
 graph.add_node("calendar_agent", call_calendar_agent)
@@ -223,7 +261,9 @@ graph.add_node("sheet_agent", call_sheet_agent)
 graph.add_node("email_tool_node", email_tool_node)
 graph.add_node("calendar_tool_node", calendar_tool_node)
 graph.add_node("sheet_tool_node", sheet_tool_node)
+graph.add_node("memory_tool_node", memory_tool_node)
 graph.add_node("clear_state", clear_sub_agents_state)
+graph.add_node("memory_agent", call_memory_agent)
 # Supervisor conditional edges
 graph.add_conditional_edges(
     "supervisor",
@@ -232,7 +272,7 @@ graph.add_conditional_edges(
         "to_email_agent": "email_agent",
         "to_calendar_agent": "calendar_agent",
         "to_sheet_agent": "sheet_agent",
-        "end": END
+        "end": "memory_agent"
     },
 )
 
@@ -271,8 +311,16 @@ graph.add_conditional_edges(
 graph.add_edge("email_tool_node", "email_agent")
 graph.add_edge("calendar_tool_node", "calendar_agent")
 graph.add_edge("sheet_tool_node", "sheet_agent")
-
+graph.add_edge("memory_tool_node", "memory_agent")
 graph.add_edge("clear_state", "supervisor")
+
+graph.add_edge("retrieve_memory", "supervisor")
+graph.add_conditional_edges("memory_agent",
+    memory_agent_should_continue,
+    {
+        "to_memory_tool": "memory_tool_node",
+        "end": END
+    },)
 
 # Compile the graph
 checkpointer = MemorySaver()

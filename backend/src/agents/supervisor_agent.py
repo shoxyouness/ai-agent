@@ -3,7 +3,7 @@ from langchain_core.language_models import BaseChatModel
 from src.agents.base_agent import BaseAgent
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
-
+from src.config.llm import llm_client
 
 PROMPT = """
 The user name is {user_name}.
@@ -21,6 +21,16 @@ No tools are available to you. Rely on sub-agents for tool calls.
 
 ---
 
+**Memory Integration**
+
+Before analyzing the user's query and routing, **you must first review the RETRIEVED CONTEXT FROM LONG-TERM MEMORY**.
+
+- **Priority:** Treat retrieved memory as high-priority, contextual facts that apply to the current user query or conversation.
+- **Routing:** Use memory to inform initial routing. For example, if memory states "User prefers meetings in the morning," and the query is "Book a meeting," route to `calendar_agent` with the time preference included in the `message_to_next_agent`.
+- **Fact Injection:** If the memory provides a crucial, simple fact (e.g., "User's preferred time is 9 AM"), and that fact is needed by a sub-agent, ensure the fact is passed explicitly in the `message_to_next_agent`.
+- **Synthesis:** Use retrieved memory in the final `response` synthesis to provide a richer, more personalized, or more efficient answer (e.g., "I've handled your request, prioritizing the 9 AM time slot as per your long-term preference.").
+
+---
 Instructions:
 
 Query Analysis and Routing:
@@ -68,6 +78,10 @@ Additional Notes:
 - If details are missing in the query, include a note in routing (e.g., "ROUTE: sheet_agent - Contact not found, suggest creating new contact").
 
 ---
+**RETRIEVED CONTEXT FROM LONG-TERM MEMORY (If available):**
+{retrieved_memory}
+---
+
 
 Current Date and Time: {current_date_time}
 Time Zone: Europe/Berlin
@@ -102,7 +116,7 @@ class Supervisor(BaseModel):
         "Keep the instruction concise, domain-specific, and directly actionable for that agent."
     )
     )
-    
+
     response: str = Field(
         description=(
             "A polished, user-facing response. If routing to an agent, this can be a confirmation "
@@ -138,3 +152,6 @@ class SupervisorAgent(BaseAgent):
             "Synthesize multi-agent responses",
             "Manage workflow coordination"
         ]
+    
+
+supervisor_agent = SupervisorAgent(llm=llm_client)

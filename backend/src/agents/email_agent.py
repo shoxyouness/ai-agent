@@ -2,7 +2,8 @@ from typing import List
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from src.agents.base_agent import BaseAgent
-
+from src.config.llm import llm_client
+from src.tools.email_tools import EMAIL_OUTLOOK_TOOLS 
 PROMPT= """
 User Name is {user_name}.
 Email Agent Prompt
@@ -91,3 +92,6 @@ class EmailAgent(BaseAgent):
             "Reply to emails professionally",
             "Personalize email tone and style"
         ]
+    
+
+email_agent = EmailAgent(llm=llm_client, tools=EMAIL_OUTLOOK_TOOLS)

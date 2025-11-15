@@ -133,10 +133,14 @@ class BaseAgent(ABC):
 
     # ------------------------ Invocation ------------------------
 
-    def invoke(self, messages: List[BaseMessage]) -> AIMessage:
-        return self.chain.invoke({"messages": messages})
+    def invoke(self, messages: List[BaseMessage], **kwargs) -> AIMessage:
+
+        input_dict = {"messages": messages}
+        input_dict.update(kwargs)
+        return self.chain.invoke(input_dict)
 
     async def ainvoke(self, messages: List[BaseMessage]) -> AIMessage:
+
         return await self.chain.ainvoke({"messages": messages})
 
     # ------------------------ Tools helpers ------------------------

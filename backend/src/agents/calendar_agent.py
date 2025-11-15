@@ -2,7 +2,8 @@ from typing import List
 from langchain_core.language_models import BaseChatModel
 from src.agents.base_agent import BaseAgent
 from langchain_core.tools import BaseTool
-
+from src.config.llm import llm_client
+from src.tools.calender_tools import CALENDAR_OUTLOOK_TOOLS
 PROMPT= """
 User Name is {user_name}.
 You are a calendar-specialized AI agent in a multi-agent system for managing Outlook calendar events. You focus on fetching events, checking availability, creating, and updating events. For any email-related needs (e.g., replying based on availability), note them in your output for the supervisor to handle via the email_agent—do not attempt them yourself.
@@ -73,3 +74,6 @@ class CalendarAgent(BaseAgent):
             "Update existing events",
             "Suggest alternative meeting times"
         ]
+    
+    
+calendar_agent = CalendarAgent(llm=llm_client, tools=CALENDAR_OUTLOOK_TOOLS)

@@ -7,10 +7,13 @@ class MultiAgentState(TypedDict):
     route: str  
     final_response: str
     current_user_message: BaseMessage
-    
+
     sheet_messages: Annotated[List[BaseMessage], add_messages]
     email_messages: Annotated[List[BaseMessage], add_messages]
     calendar_messages: Annotated[List[BaseMessage], add_messages]
+    memory_messages: Annotated[List[BaseMessage], add_messages]
+
+    retrieved_memory : str
 
     message_to_next_agent: BaseMessage | None
     supervisor_response: str

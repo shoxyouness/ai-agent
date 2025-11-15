@@ -2,7 +2,8 @@ from typing import List
 from langchain_core.language_models import BaseChatModel
 from src.agents.base_agent import BaseAgent
 from langchain_core.tools import BaseTool
-
+from src.config.llm import llm_client
+from src.tools.sheet_tools import GOOGLE_SHEETS_CONTACT_TOOLS
 
 PROMPT = """
 User Name is {user_name}.
@@ -117,3 +118,4 @@ class SheetAgent(BaseAgent):
             "Track contact metadata (tags, notes, last contacted)"
         ]
 
+sheet_agent = SheetAgent(llm=llm_client, tools=GOOGLE_SHEETS_CONTACT_TOOLS) 

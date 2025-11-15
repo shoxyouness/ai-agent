@@ -8,8 +8,8 @@ class SearchMemoryInput(BaseModel):
     limit: int = Field(default=5, description="Maximum number of memories to retrieve")
 
 class AddMemoryInput(BaseModel):
-    content: str = Field(..., description="The memory content to store")
-    category: Optional[str] = Field(None, description="Category: 'preferences', 'contacts', 'scheduling', 'tasks', 'facts'")
+    content: str = Field(..., description="The memory content to store, it should be detailed and specific and useful for future interactions and personalization.")
+    category: Optional[str] = Field(None, description="Chose Category like: 'preferences', 'contacts', 'scheduling', 'tasks', 'facts'")
     importance: Optional[str] = Field(None, description="Importance level: 'high', 'medium', 'low'")
 
 class UpdateMemoryInput(BaseModel):
@@ -21,7 +21,7 @@ class DeleteMemoryInput(BaseModel):
 
 
 @tool("search_memory", args_schema=SearchMemoryInput)
-def search_memory(query: str, limit: int = 5) -> str:
+def search_memory(query: str, limit: int = 5, more :bool = True ) -> str:
     """
     Search for relevant memories based on a query.
     Use this when you need to recall information from past conversations,
@@ -52,19 +52,25 @@ def search_memory(query: str, limit: int = 5) -> str:
             metadata = mem.get('metadata', {})
             score = mem.get('score', 'N/A')
             created_at = mem.get('created_at', 'N/A')
+            if more:
+                output.append(f"{i}. {memory_text}")
+                output.append(f"   ID: {memory_id}")
+                output.append(f"   Score: {score:.4f}" if isinstance(score, (int, float)) else f"   Score: {score}")
+                
+                if metadata:
+                    category = metadata.get('category', 'N/A')
+                    importance = metadata.get('importance', 'N/A')
+                    output.append(f"   Category: {category}, Importance: {importance}")
+                
+                output.append(f"   Created: {created_at}")
+                output.append("")
+            else:
+                output.append(f"{i}. {memory_text}")
+                if metadata:
+                    category = metadata.get('category', 'N/A')
+                    importance = metadata.get('importance', 'N/A')
+                    output.append(f"   Category: {category}, Importance: {importance}")
             
-            output.append(f"{i}. {memory_text}")
-            output.append(f"   ID: {memory_id}")
-            output.append(f"   Score: {score:.4f}" if isinstance(score, (int, float)) else f"   Score: {score}")
-            
-            if metadata:
-                category = metadata.get('category', 'N/A')
-                importance = metadata.get('importance', 'N/A')
-                output.append(f"   Category: {category}, Importance: {importance}")
-            
-            output.append(f"   Created: {created_at}")
-            output.append("")
-        
         return "\n".join(output)
     
     except Exception as e:
