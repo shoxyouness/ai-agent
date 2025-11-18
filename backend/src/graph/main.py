@@ -42,6 +42,9 @@ def retrieve_memory(state: MultiAgentState):
     retrieved_memory =  search_memory.invoke({"query": current_user_message, "limit": 1, "more": True})
 
     return {"retrieved_memory": retrieved_memory, "current_user_message": current_user_message}
+
+
+
 def call_memory_agent(state: MultiAgentState):
     """Memory agent to manage long-term memory operations."""
     
@@ -104,7 +107,7 @@ def call_email_agent(state: MultiAgentState):
     response = email_agent.invoke(input_msgs)
 
     return {
-        "messages": state["messages"] + [response],
+        "messages": [response],
         "email_messages": email_history + [next_msg, response],
         "email_agent_response": response.content,
         "message_to_next_agent": None,
@@ -123,7 +126,7 @@ def call_calendar_agent(state: MultiAgentState):
 
 
     return {
-        "messages": state["messages"] + [response],
+        "messages": [response],
         "calendar_messages": cal_history + [next_msg, response],
         "calendar_agent_response": response.content,
         "message_to_next_agent": None,
@@ -142,21 +145,60 @@ def call_sheet_agent(state: MultiAgentState):
 
 
     return {
-        "messages": state["messages"] + [response],
+        "messages": [response],
         "sheet_messages": sheet_history + [next_msg, response],
         "sheet_agent_response": response.content,
         "message_to_next_agent": None,
     }
+
+
 def clear_sub_agents_state(state: MultiAgentState):
-    """Clear sub-agent specific messages from state."""
+    """Clear sub-agent specific messages from state AND rebuild main history."""
+    
+    # 1. Capture the final response summary content
+    agent_summary = None
+    if state.get("email_agent_response"):
+        agent_summary = state["email_agent_response"]
+    elif state.get("calendar_agent_response"):
+        agent_summary = state["calendar_agent_response"]
+    elif state.get("sheet_agent_response"):
+        agent_summary = state["sheet_agent_response"]
+
+    # 2. Identify the messages to keep (Original user message + Supervisor messages)
+    # We want to keep only the highest-level conversation between the User and Supervisor.
+    
+    # Filter out all intermediary steps (tool calls, tool results, and sub-agent
+    # non-final AI/Human messages) from the main history.
+    
+    # Keep only the original user message and the latest supervisor instructions
+    messages_to_keep = []
+    
+    # The current messages contain the full trace, we want to strip the tool calls
+    for msg in state["messages"]:
+        # Only keep the original HumanMessage (name=None) and Supervisor's decisions
+        if (isinstance(msg, HumanMessage) and msg.name is None) or (msg.name == "Supervisor"):
+            messages_to_keep.append(msg)
+            
+    # 3. Add the summary of the sub-agent's work as a clean HumanMessage
+    if agent_summary:
+        summary_message = HumanMessage(
+            content=f"The previous task was successfully executed by a sub-agent (result: {agent_summary}...). Continue the main plan.",
+            name="Supervisor_System_Message" # Use a unique system-like name
+        )
+        messages_to_keep.append(summary_message)
+    
+    # 4. Return the cleaned state
     return {
+        "messages": messages_to_keep, # <-- Crucial: Replaces the old history
         "email_messages": [],
         "calendar_messages": [],
         "sheet_messages": [],
+        # Important: Clear the sub-agent response summary to avoid using it again
+        "email_agent_response": None, 
+        "calendar_agent_response": None,
+        "sheet_agent_response": None,
         "message_to_next_agent": None,
     }
-
-
 # ============================================================
 # Step 3: Create tool nodes (no changes needed)
 # ============================================================
@@ -230,6 +272,7 @@ def memory_agent_should_continue(state: MultiAgentState) -> str:
         return "to_memory_tool"
     
     return "end"
+
 def supervisor_agent_should_continue(state: "MultiAgentState") -> str:
 
     route = state.get("route", "none")
