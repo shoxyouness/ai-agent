@@ -71,30 +71,49 @@ def call_memory_agent(state: MultiAgentState):
         "memory_messages": new_memory_messages, # Update the internal memory loop history
         "memory_agent_response": response.content,
         "message_to_next_agent": None,
-    }
+    } 
 
 def call_supervisor(state: MultiAgentState):
     """Supervisor analyzes messages and decides next step."""
-    messages = state["messages"]
+    # Prefer cleaned history if present, otherwise fall back to raw messages
+    messages = state.get("core_messages") 
     retrieved_memory_context = state.get("retrieved_memory", "No relevant Context found.")
-    response = supervisor_agent.invoke(messages = messages ,retrieved_memory=retrieved_memory_context)
+
+    response = supervisor_agent.invoke(
+        messages=messages,
+        retrieved_memory=retrieved_memory_context,
+    )
 
     supervisor_ai_message = AIMessage(
-        content=response.response, name = "Supervisor",
-
+        content=response.response,
+        name="Supervisor",
     )
+
     print("=========================================================")
     print("Supervisor thoughts:", response.thoughts)
     print("=========================================================")
-
     print("=========================================================")
     print("Supervisor decision:", response.route)
     print("=========================================================")
+
     message_to_next_agent = None
     if response.route != "none":
-        message_to_next_agent = HumanMessage(content=response.message_to_next_agent, name = "Supervisor")
+        message_to_next_agent = HumanMessage(
+            content=response.message_to_next_agent,
+            name="Supervisor",
+        )
 
-    return {"route": response.route.lower(), "messages": [supervisor_ai_message],"supervisor_response": response.response, "message_to_next_agent": message_to_next_agent}
+    # Update both raw and core histories
+    new_core_messages = state.get("core_messages") + [supervisor_ai_message]
+
+    return {
+        "route": response.route.lower(),
+        "messages":  [supervisor_ai_message]+ [message_to_next_agent] if message_to_next_agent else [],
+        "core_messages": new_core_messages,
+        "supervisor_response": response.response,
+        "message_to_next_agent": message_to_next_agent,
+    }
+
 
 def call_email_agent(state: MultiAgentState):
     email_history = state.get("email_messages", [])
@@ -107,10 +126,13 @@ def call_email_agent(state: MultiAgentState):
     response = email_agent.invoke(input_msgs)
 
     return {
-        "messages": [response],
+        "messages": state["messages"]+ [response],
+        "core_messages": state["core_messages"] + [response],
         "email_messages": email_history + [next_msg, response],
         "email_agent_response": response.content,
         "message_to_next_agent": None,
+        "calendar_agent_response": None,
+        "sheet_agent_response": None,
     }
 def call_calendar_agent(state: MultiAgentState):
     cal_history = state.get("calendar_messages", [])
@@ -124,12 +146,14 @@ def call_calendar_agent(state: MultiAgentState):
     input_msgs = cal_history + [next_msg]
     response = calendar_agent.invoke(input_msgs)
 
-
     return {
         "messages": [response],
+        "core_messages": state["core_messages"] + [response],
         "calendar_messages": cal_history + [next_msg, response],
         "calendar_agent_response": response.content,
         "message_to_next_agent": None,
+        "email_agent_response": None,
+        "sheet_agent_response": None,
     }
 def call_sheet_agent(state: MultiAgentState):
     sheet_history = state.get("sheet_messages", [])
@@ -146,59 +170,59 @@ def call_sheet_agent(state: MultiAgentState):
 
     return {
         "messages": [response],
+        "core_messages": state["core_messages"] + [response],
         "sheet_messages": sheet_history + [next_msg, response],
-        "sheet_agent_response": response.content,
+        "sheet_agent_response": response.content if response else "zzzz",
         "message_to_next_agent": None,
+        "email_agent_response": None,
+        "calendar_agent_response": None,
     }
 
 
 def clear_sub_agents_state(state: MultiAgentState):
-    """Clear sub-agent specific messages from state AND rebuild main history."""
-    
-    # 1. Capture the final response summary content
+    """
+    Build a cleaned 'core_messages' history containing:
+    - all HumanMessages (user)
+    - all Supervisor / Supervisor_System_Message messages
+    and reset sub-agent state.
+    """
     agent_summary = None
     if state.get("email_agent_response"):
         agent_summary = state["email_agent_response"]
-    elif state.get("calendar_agent_response"):
+    if state.get("calendar_agent_response"):
         agent_summary = state["calendar_agent_response"]
-    elif state.get("sheet_agent_response"):
+    if state.get("sheet_agent_response"):
         agent_summary = state["sheet_agent_response"]
+    print("agent_summary:", agent_summary)
+    core_messages: list = []
 
-    # 2. Identify the messages to keep (Original user message + Supervisor messages)
-    # We want to keep only the highest-level conversation between the User and Supervisor.
-    
-    # Filter out all intermediary steps (tool calls, tool results, and sub-agent
-    # non-final AI/Human messages) from the main history.
-    
-    # Keep only the original user message and the latest supervisor instructions
-    messages_to_keep = []
-    
-    # The current messages contain the full trace, we want to strip the tool calls
+    # Build cleaned history from the raw t race
     for msg in state["messages"]:
-        # Only keep the original HumanMessage (name=None) and Supervisor's decisions
-        if (isinstance(msg, HumanMessage) and msg.name is None) or (msg.name == "Supervisor"):
-            messages_to_keep.append(msg)
-            
-    # 3. Add the summary of the sub-agent's work as a clean HumanMessage
+        if isinstance(msg, HumanMessage):
+            core_messages.append(msg)
+        else:
+            name = getattr(msg, "name", None)
+            if name in ("Supervisor", "sub_agent_task_summary"):
+                core_messages.append(msg)
+
     if agent_summary:
         summary_message = HumanMessage(
-            content=f"The previous task was successfully executed by a sub-agent (result: {agent_summary}...). Continue the main plan.",
-            name="Supervisor_System_Message" # Use a unique system-like name
+            content=(
+                "The previous task was successfully executed by a sub-agent "
+                f"(result: {agent_summary}...). Continue the main plan."
+            ),
+            name="sub_agent_task_summary",
         )
-        messages_to_keep.append(summary_message)
-    
-    # 4. Return the cleaned state
+        core_messages.append(summary_message)
+
     return {
-        "messages": messages_to_keep, # <-- Crucial: Replaces the old history
+        "core_messages": core_messages,
         "email_messages": [],
         "calendar_messages": [],
         "sheet_messages": [],
-        # Important: Clear the sub-agent response summary to avoid using it again
-        "email_agent_response": None, 
-        "calendar_agent_response": None,
-        "sheet_agent_response": None,
         "message_to_next_agent": None,
     }
+
 # ============================================================
 # Step 3: Create tool nodes (no changes needed)
 # ============================================================
@@ -403,7 +427,7 @@ def run_multi_agent():
         if not user_input:
             continue
         
-        inputs = {"messages": [HumanMessage(content=user_input)]}
+        inputs = {"messages": [HumanMessage(content=user_input)], "core_messages": [HumanMessage(content=user_input)]}
         
         print("\nAgent:")
         config = {"configurable": {"thread_id": thread_id}}  
