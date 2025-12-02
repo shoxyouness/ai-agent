@@ -8,11 +8,15 @@ from src.config.llm import llm_client
 load_dotenv()
 
 class Supervisor(BaseModel):
-    route: Literal["email_agent", "calendar_agent","sheet_agent", "none"] = Field(
+    thoughts: str = Field(
+        description="Reflect on the user's input and the current context to determine the next steps."
+    ),
+    route: Literal["email_agent", "calendar_agent","sheet_agent", "memory_agent","none"] = Field(
         description="Determines which specialist to activate next in the workflow sequence:"
         "'email_agent' when the task is primarily email-related, "
         "'calendar_agent' when the task is primarily calendar-related,"
         "''sheet_agent' when the task is primarily sheet_related,"
+        "'memory_agent' when durable cross-task preferences/facts must be searched, added, or updated, "
         "'none' if the task does not require any agent."
     )
     response: str = Field(
@@ -23,7 +27,7 @@ class Supervisor(BaseModel):
         ),
     )
 
-with open("src/prompts/supervisor_agent_prompt.txt", "r") as f:
+with open("src/prompts/supervisor_agent_prompt.txt", "r",encoding="utf-8") as f:
     prompt_template_str = f.read()
 
 # llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0, api_key=os.getenv("GEMINI_API_KEY"))

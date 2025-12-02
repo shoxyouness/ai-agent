@@ -327,6 +327,12 @@ def update_calendar_event(event_id: str, **kwargs) -> str:
     except Exception as e:
         return f"A general error occurred: {e}"
 
+
+CALENDAR_OUTLOOK_TOOLS = [
+    get_calendar_events,
+    create_calendar_event,
+    update_calendar_event
+]
 def main():
     print("--- Testing create_calendar_event ---")
     
