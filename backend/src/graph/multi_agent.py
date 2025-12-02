@@ -32,29 +32,28 @@ def call_supervisor(state: MultiAgentState):
 
     )
     print("=========================================================")
+    print("Supervisor thoughts:", response.thoughts)
+    print("=========================================================")
+
+    print("=========================================================")
     print("Supervisor decision:", response.route)
     print("=========================================================")
 
     return {"route": response.route.lower(), "messages": supervisor_ai_message}
 
 
-def call_memory_agent(state: MultiAgentState):
-    """Memory agent calls its chain."""
-    messages = state["messages"]
-    response = memory_agent_chain.invoke(messages)
-    return {"messages": [response]}
 
 def call_email_agent(state: MultiAgentState):
     """Email agent calls its chain."""
     messages = state["messages"]
     response = email_agent_chain.invoke(messages)
-    return {"messages": [response]}
+    return {"messages": [response], "email_agent_response": response.content}
 
 def call_calendar_agent(state: MultiAgentState):
     """Calendar agent calls its chain."""
     messages = state["messages"]
     response = calendar_agent_chain.invoke(messages)
-    return {"messages": [response]}
+    return {"messages": [response], "calendar_agent_response": response.content}
 
 
 def call_sheet_agent(state:MultiAgentState):
@@ -62,7 +61,13 @@ def call_sheet_agent(state:MultiAgentState):
     messages = state["messages"]
     response = sheet_agent_chain.invoke(messages)
 
-    return {"messages":[response]}
+    return {"messages":[response], "sheet_agent_response": response.content}
+
+def call_memory_agent(state: MultiAgentState):
+    """Memory agent calls its chain."""
+    messages = state["messages"]
+    response = memory_agent_chain.invoke(messages)
+    return {"messages": [response], "memory_agent_response": response.content}
 
 email_tool_node = ToolNode(tools = email_tools)
 calendar_tool_node = ToolNode(tools = calendar_tools)
@@ -198,8 +203,8 @@ def run_multi_agent():
         print("\nAgent:")
         config = {"configurable": {"thread_id": thread_id}}  
         agent_response = app.invoke(input=inputs, config=config)
-        print("==========================================================")
         snapshot = app.get_state(config=config)
+
         print("STATE VALUES:")
         pprint(snapshot.values)
         print("NEXT:", snapshot.next)  

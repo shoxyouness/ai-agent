@@ -8,6 +8,9 @@ from src.config.llm import llm_client
 load_dotenv()
 
 class Supervisor(BaseModel):
+    thoughts: str = Field(
+        description="Reflect on the user's input and the current context to determine the next steps."
+    ),
     route: Literal["email_agent", "calendar_agent","sheet_agent", "memory_agent","none"] = Field(
         description="Determines which specialist to activate next in the workflow sequence:"
         "'email_agent' when the task is primarily email-related, "
