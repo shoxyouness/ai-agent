@@ -50,25 +50,33 @@ def call_memory_agent(state: MultiAgentState):
     
     memory_history = state.get("memory_messages", [])
     
-    next_msg = state.get("message_to_next_agent")
-    if next_msg is None:
-        next_msg = state["messages"][-1]
     
     retrieved_memory_context=state.get("retrieved_memory", "No relevant Context found.")
+    all_messages = state.get("messages", [])
+    print("supervisor messages:", all_messages)
+    for msg in reversed(all_messages):
+            if isinstance(msg, HumanMessage):
+                next_msg = msg
+                break
+    supervisor_agent_message = state.get("supervisor_response", "")
+    print("==========================================================")
+    print("supervisor message to memory agent:", supervisor_agent_message)
+    print("==========================================================")
+    print("==========================================================")   
+    print("user message to memory agent:", next_msg.content) 
+    print("==========================================================")
+    response = memory_agent.invoke(messages=memory_history,retrieved_memory_context= retrieved_memory_context, user_message=next_msg.content, supervisor_agent_message=supervisor_agent_message) 
     input_msgs = memory_history + [next_msg]
 
-    response = memory_agent.invoke(messages=input_msgs,retrieved_memory_context= retrieved_memory_context, user_message=next_msg.content) 
-    
     print("=========================================================")
     print("Memory Agent Output:", response.content)
     print("=========================================================")
 
     # Append the input and the response to the agent's internal history
-    new_memory_messages = [next_msg, response]
     
     return {
         "messages": [response], # Append agent response to main thread
-        "memory_messages": new_memory_messages, # Update the internal memory loop history
+        "memory_messages": input_msgs, # Update the internal memory loop history
         "memory_agent_response": response.content,
         "message_to_next_agent": None,
     } 
@@ -134,6 +142,7 @@ def call_email_agent(state: MultiAgentState):
         "calendar_agent_response": None,
         "sheet_agent_response": None,
     }
+
 def call_calendar_agent(state: MultiAgentState):
     cal_history = state.get("calendar_messages", [])
     next_msg = state.get("message_to_next_agent")
@@ -155,6 +164,7 @@ def call_calendar_agent(state: MultiAgentState):
         "email_agent_response": None,
         "sheet_agent_response": None,
     }
+
 def call_sheet_agent(state: MultiAgentState):
     sheet_history = state.get("sheet_messages", [])
     next_msg = state.get("message_to_next_agent")
@@ -206,13 +216,9 @@ def clear_sub_agents_state(state: MultiAgentState):
                 core_messages.append(msg)
 
     if agent_summary:
-        summary_message = HumanMessage(
-            content=(
-                "The previous task was successfully executed by a sub-agent "
-                f"(result: {agent_summary}...). Continue the main plan."
-            ),
-            name="sub_agent_task_summary",
-        )
+        summary_message = AIMessage(
+            content=f"[SUB_AGENT_SUMMARY]\n{agent_summary}",            name="sub_agent_task_summary",
+              )
         core_messages.append(summary_message)
 
     return {

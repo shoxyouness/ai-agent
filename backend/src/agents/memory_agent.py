@@ -22,6 +22,10 @@ Keep your reasoning short, factual, and action-oriented.
 Use the provided memory tools to search, add, update, or delete information as needed.
 after processing, always end with a concise summary of actions taken.
 
+What you should not save: 
+- Sensitive personal information (e.g., passwords, financial details).
+- Meetings times or dates 
+- Irrelevant or trivial details (e.g., small talk, off-topic discussions).
 
 ------
 Memory Tools Available:
@@ -36,9 +40,11 @@ look at the retrieved memory context user message and decide if you need to stor
 if you decide to store or update memory, use the appropriate memory tool(s) listed above.
 if you decide not to store or update memory, simply respond with "No memory update needed."
 ------
-User's Message: {user_message}
+User Message: {user_message}
 ------
-
+------
+Last Supervisor Agent Message After finishing: {supervisor_agent_message}
+------
 ------
 Memory Context Retrieved: {retrieved_memory_context}
 ------
