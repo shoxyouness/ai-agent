@@ -19,7 +19,12 @@ from src.schema.multi_agent_schema import MultiAgentState
 # TODO
 from src.tools.memory_tools import search_memory
 
+
+# import audi utils for transcription and TTS
+from src.utils.audio_utils import transcribe_audio_file, tts_to_file, AUDIO_INPUT_PATH, AUDIO_OUTPUT_PATH
+
 load_dotenv()
+
 
 email_tools =email_agent.tools
 calendar_tools = calendar_agent.tools
@@ -55,7 +60,7 @@ def call_memory_agent(state: MultiAgentState):
     all_messages = state.get("messages", [])
     print("supervisor messages:", all_messages)
     for msg in reversed(all_messages):
-            if isinstance(msg, HumanMessage):
+            if isinstance(msg, HumanMessage) and msg.name != "Supervisor":
                 next_msg = msg
                 break
     supervisor_agent_message = state.get("supervisor_response", "")
@@ -474,6 +479,63 @@ def run_multi_agent():
             import traceback
             traceback.print_exc()
 
+def run_multi_agent_from_audio():
+    """
+    One-shot test:
+    - Read src/audio/audio.mp3
+    - Transcribe it with ElevenLabs (Speech-to-Text)
+    - Run multi-agent graph with that text as user input
+    - Generate TTS answer to src/audio/response.mp3
+    """
+    print("\n" + "="*70)
+    print("        MULTI-AGENT AUDIO TEST (ElevenLabs)")
+    print("="*70)
+
+    # 1️⃣ Transcribe input audio
+    print(f"\n🎙  Transcribing audio from: {AUDIO_INPUT_PATH}")
+    user_text = transcribe_audio_file(AUDIO_INPUT_PATH)
+    print(f"\n📝 TRANSCRIBED TEXT:\n{user_text}\n")
+
+    # 2️⃣ Run your graph with this as the user message
+    thread_id = "multi_agent_audio_thread"
+
+    inputs = {
+        "messages": [HumanMessage(content=user_text)],
+        "core_messages": [HumanMessage(content=user_text)],
+    }
+    config = {"configurable": {"thread_id": thread_id}}
+
+    print("🤖 Running multi-agent graph...")
+    agent_response = app.invoke(input=inputs, config=config)
+
+    # For debugging, keep your snapshot logging if you want
+    snapshot = app.get_state(config=config)
+    print("==========================================================")
+    print("STATE VALUES:")
+    pprint(snapshot.values)
+    print("NEXT:", snapshot.next)
+    print("==========================================================")
+
+    # 3️⃣ Extract supervisor + final output (like in run_multi_agent)
+    supervisor_response = agent_response.get("supervisor_response") or snapshot.values.get("supervisor_response")
+    if supervisor_response:
+        print("\n🧠 SUPERVISOR RESPONSE:\n" + "-" * 50)
+        print(supervisor_response)
+        print("-" * 50 + "\n")
+
+    if "messages" in agent_response and agent_response["messages"]:
+        final_message = agent_response["messages"][-1]
+        final_text = final_message.content
+    else:
+        final_text = str(agent_response)
+
+    print(f"\n💬 FINAL AGENT OUTPUT (TEXT):\n{final_text}\n")
+
+    # 4️⃣ Convert final answer to audio
+    print("🔊 Generating TTS answer with ElevenLabs...")
+    out_path = tts_to_file(supervisor_response)
+    print(f"✅ Audio response saved to: {out_path}")
+
 
 # ============================================================
 # Optional: Utility functions for agent management
@@ -531,29 +593,29 @@ def inspect_agent(agent_name: str):
 
 if __name__ == "__main__":
     import sys
-    
-    # Check for command line arguments
+
+    # If you want to keep CLI commands:
     if len(sys.argv) > 1:
         command = sys.argv[1]
-        
+
         if command == "info":
-            # Show info for all agents
             for name in ["email_agent", "calendar_agent", "sheet_agent", "supervisor"]:
                 inspect_agent(name)
-        
+
         elif command == "reload":
-            # Reload all prompts
             reload_all_prompts()
-        
+
         elif command.startswith("inspect:"):
-            # Inspect specific agent
             agent_name = command.split(":", 1)[1]
             inspect_agent(agent_name)
-        
+
+        elif command == "audio":
+            # NEW: audio-based test
+            run_multi_agent_from_audio()
+
         else:
             print(f"Unknown command: {command}")
-            print("Available commands: info, reload, inspect:<agent_name>")
-    
+            print("Available commands: info, reload, inspect:<agent_name>, audio")
     else:
-        # Run the interactive agent
+        # Default: interactive text mode
         run_multi_agent()
