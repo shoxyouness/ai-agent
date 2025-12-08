@@ -5,7 +5,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, AIMessage
 from pprint import pprint
 import json
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage, AIMessageChunk
+import asyncio # <--- Add this
 
 from src.agents import (
     email_agent,
@@ -50,7 +51,7 @@ def retrieve_memory(state: MultiAgentState):
 
 
 
-def call_memory_agent(state: MultiAgentState):
+async def call_memory_agent(state: MultiAgentState):
     """Memory agent to manage long-term memory operations."""
     
     memory_history = state.get("memory_messages", [])
@@ -70,7 +71,7 @@ def call_memory_agent(state: MultiAgentState):
     print("==========================================================")   
     print("user message to memory agent:", next_msg.content) 
     print("==========================================================")
-    response = memory_agent.invoke(messages=memory_history,retrieved_memory_context= retrieved_memory_context, user_message=next_msg.content, supervisor_agent_message=supervisor_agent_message) 
+    response = await memory_agent.ainvoke(messages=memory_history,retrieved_memory_context= retrieved_memory_context, user_message=next_msg.content, supervisor_agent_message=supervisor_agent_message) 
     input_msgs = memory_history + [next_msg]
 
     print("=========================================================")
@@ -86,13 +87,13 @@ def call_memory_agent(state: MultiAgentState):
         "message_to_next_agent": None,
     } 
 
-def call_supervisor(state: MultiAgentState):
+async def call_supervisor(state: MultiAgentState):
     """Supervisor analyzes messages and decides next step."""
     # Prefer cleaned history if present, otherwise fall back to raw messages
     messages = state.get("core_messages") 
     retrieved_memory_context = state.get("retrieved_memory", "No relevant Context found.")
 
-    response = supervisor_agent.invoke(
+    response = await supervisor_agent.ainvoke(
         messages=messages,
         retrieved_memory=retrieved_memory_context,
     )
@@ -128,7 +129,7 @@ def call_supervisor(state: MultiAgentState):
     }
 
 
-def call_email_agent(state: MultiAgentState):
+async def call_email_agent(state: MultiAgentState):
     email_history = state.get("email_messages", [])
     next_msg = state.get("message_to_next_agent")
 
@@ -136,7 +137,7 @@ def call_email_agent(state: MultiAgentState):
         next_msg = state["messages"][-1]
 
     input_msgs = email_history + [next_msg]
-    response = email_agent.invoke(input_msgs)
+    response = await email_agent.ainvoke(input_msgs)
 
     return {
         "messages": state["messages"]+ [response],
@@ -148,7 +149,7 @@ def call_email_agent(state: MultiAgentState):
         "sheet_agent_response": None,
     }
 
-def call_calendar_agent(state: MultiAgentState):
+async def call_calendar_agent(state: MultiAgentState):
     cal_history = state.get("calendar_messages", [])
     next_msg = state.get("message_to_next_agent")
 
@@ -158,7 +159,7 @@ def call_calendar_agent(state: MultiAgentState):
     print("Calling calendar agent with:", next_msg)
 
     input_msgs = cal_history + [next_msg]
-    response = calendar_agent.invoke(input_msgs)
+    response = await calendar_agent.ainvoke(input_msgs)
 
     return {
         "messages": [response],
@@ -170,7 +171,7 @@ def call_calendar_agent(state: MultiAgentState):
         "sheet_agent_response": None,
     }
 
-def call_sheet_agent(state: MultiAgentState):
+async def call_sheet_agent(state: MultiAgentState):
     sheet_history = state.get("sheet_messages", [])
     next_msg = state.get("message_to_next_agent")
 
@@ -180,7 +181,7 @@ def call_sheet_agent(state: MultiAgentState):
     print("Calling sheet agent with:", next_msg)
 
     input_msgs = sheet_history + [next_msg]
-    response = sheet_agent.invoke(input_msgs)
+    response = await sheet_agent.ainvoke(input_msgs)
 
 
     return {
@@ -408,6 +409,72 @@ app = graph.compile(checkpointer=checkpointer)
 # ============================================================
 # Step 6: Run function (no changes needed)
 # ============================================================
+async def run_multi_agent_with_streaming():
+    """Run the multi-agent system interactively with streaming (Async)."""
+    print("\n" + "="*70)
+    print(" "*15 + "MULTI-AGENT SYSTEM RUNNING (STREAMING)")
+    print("="*70)
+    
+    # ... (Display agent info code remains the same) ...
+
+    thread_id = "multi_agent_thread"  
+    
+    while True:
+        # standard input() is blocking, but acceptable for a simple CLI test
+        user_input = input("\nYou: ").strip()
+        
+        if user_input.lower() == 'exit':
+            print("\n👋 Goodbye!\n")
+            break
+        
+        if not user_input:
+            continue
+        
+        inputs = {
+            "messages": [HumanMessage(content=user_input)], 
+            "core_messages": [HumanMessage(content=user_input)]
+        }
+        
+        config = {"configurable": {"thread_id": thread_id}}
+        
+        print("\n" + "-"*50)
+        
+        last_node_name = None
+
+        try:
+            # --- FIX: Use 'async for' and 'app.astream' ---
+            async for msg, metadata in app.astream(
+                inputs, 
+                config, 
+                stream_mode="messages" 
+            ):
+                # 1. Handle Streaming Tokens
+                if isinstance(msg, AIMessageChunk) and msg.content:
+                    node_name = metadata.get("langgraph_node", "Agent")
+                    
+                    if node_name != last_node_name:
+                        print(f"\n\n🤖 {node_name.upper()}: ", end="", flush=True)
+                        last_node_name = node_name
+                    
+                    print(msg.content, end="", flush=True)
+
+            print("\n" + "-"*50)
+
+            # 2. Retrieve Final State
+            # Note: app.get_state is still sync, which is fine here
+            snapshot = app.get_state(config)
+            
+            # ... (Rest of the printing logic remains the same) ...
+            supervisor_response = snapshot.values.get("supervisor_response")
+            if supervisor_response:
+                print("\n🧠 SUPERVISOR RESPONSE:\n" + "-" * 50)
+                print(supervisor_response)
+                print("-" * 50 + "\n")
+
+        except Exception as e:
+            print(f"\n❌ Error: {str(e)}\n")
+            import traceback
+            traceback.print_exc()
 
 def run_multi_agent():
     """Run the multi-agent system interactively."""
@@ -618,4 +685,4 @@ if __name__ == "__main__":
             print("Available commands: info, reload, inspect:<agent_name>, audio")
     else:
         # Default: interactive text mode
-        run_multi_agent()
+        asyncio.run(run_multi_agent_with_streaming())
