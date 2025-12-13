@@ -14,6 +14,7 @@ from src.agents import (
     sheet_agent,
     supervisor_agent,
     memory_agent,
+    run_browser_task
 )
 
 from src.schema.multi_agent_schema import MultiAgentState
@@ -40,6 +41,32 @@ print(f"✓ Initialized {sheet_agent.name} with {len(sheet_agent.tools)} tools")
 # ============================================================
 # Step 2: Define agent call functions
 # ============================================================
+async def call_browser_agent(state: MultiAgentState):
+    """
+    Node to execute the browser-use agent.
+    """
+    browser_history = state.get("browser_messages", [])
+    
+    # Get the task from the Supervisor
+    next_msg = state.get("message_to_next_agent")
+    if next_msg is None:
+        next_msg = state["messages"][-1] # Fallback to user message
+
+    print(f"🌍 Browser Agent working on: {next_msg.content}")
+
+    # Run the Browser Use library
+    # Note: We pass the content string to the helper function we made
+    result_text = await run_browser_task(next_msg.content)
+    
+    response_message = AIMessage(content=result_text, name="browser_agent")
+
+    return {
+        "messages": [response_message],
+        "core_messages": state["core_messages"] + [response_message],
+        "browser_messages": browser_history + [next_msg, response_message],
+        "browser_agent_response": result_text,
+        "message_to_next_agent": None,
+    }
 
 def retrieve_memory(state: MultiAgentState):
     """Retrieve relevant memories based on the current user message."""
@@ -209,6 +236,8 @@ def clear_sub_agents_state(state: MultiAgentState):
         agent_summary = state["calendar_agent_response"]
     if state.get("sheet_agent_response"):
         agent_summary = state["sheet_agent_response"]
+    if state.get("browser_agent_response"):
+        agent_summary = state["browser_agent_response"]
     print("agent_summary:", agent_summary)
     core_messages: list = []
 
@@ -284,6 +313,7 @@ def sub_agent_should_continue(state: MultiAgentState) -> str:
     if last_tc_name in SHEET_TOOL_NAMES:
         return "to_sheet_tool"
     
+    
     return "back_to_supervisor"
 
 
@@ -319,6 +349,8 @@ def supervisor_agent_should_continue(state: "MultiAgentState") -> str:
         return "to_calendar_agent"
     elif route == "sheet_agent":
         return "to_sheet_agent"
+    elif route == "browser_agent":
+        return "to_browser_agent"
 
     return "end"
 
@@ -343,6 +375,8 @@ graph.add_node("sheet_tool_node", sheet_tool_node)
 graph.add_node("memory_tool_node", memory_tool_node)
 graph.add_node("clear_state", clear_sub_agents_state)
 graph.add_node("memory_agent", call_memory_agent)
+graph.add_node("browser_agent", call_browser_agent)
+
 # Supervisor conditional edges
 graph.add_conditional_edges(
     "supervisor",
@@ -351,6 +385,7 @@ graph.add_conditional_edges(
         "to_email_agent": "email_agent",
         "to_calendar_agent": "calendar_agent",
         "to_sheet_agent": "sheet_agent",
+        "to_browser_agent": "browser_agent",
         "end": "memory_agent"
     },
 )
@@ -392,6 +427,7 @@ graph.add_edge("calendar_tool_node", "calendar_agent")
 graph.add_edge("sheet_tool_node", "sheet_agent")
 graph.add_edge("memory_tool_node", "memory_agent")
 graph.add_edge("clear_state", "supervisor")
+graph.add_edge("browser_agent", "clear_state")
 
 graph.add_edge("retrieve_memory", "supervisor")
 graph.add_conditional_edges("memory_agent",
