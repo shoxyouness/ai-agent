@@ -5,7 +5,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, AIMessage
 from pprint import pprint
 import json
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage, AIMessageChunk
+import asyncio # <--- Add this
 
 from src.agents import (
     email_agent,
@@ -13,6 +14,7 @@ from src.agents import (
     sheet_agent,
     supervisor_agent,
     memory_agent,
+    run_browser_task
 )
 
 from src.schema.multi_agent_schema import MultiAgentState
@@ -39,6 +41,32 @@ print(f"✓ Initialized {sheet_agent.name} with {len(sheet_agent.tools)} tools")
 # ============================================================
 # Step 2: Define agent call functions
 # ============================================================
+async def call_browser_agent(state: MultiAgentState):
+    """
+    Node to execute the browser-use agent.
+    """
+    browser_history = state.get("browser_messages", [])
+    
+    # Get the task from the Supervisor
+    next_msg = state.get("message_to_next_agent")
+    if next_msg is None:
+        next_msg = state["messages"][-1] # Fallback to user message
+
+    print(f"🌍 Browser Agent working on: {next_msg.content}")
+
+    # Run the Browser Use library
+    # Note: We pass the content string to the helper function we made
+    result_text = await run_browser_task(next_msg.content)
+    
+    response_message = AIMessage(content=result_text, name="browser_agent")
+
+    return {
+        "messages": [response_message],
+        "core_messages": state["core_messages"] + [response_message],
+        "browser_messages": browser_history + [next_msg, response_message],
+        "browser_agent_response": result_text,
+        "message_to_next_agent": None,
+    }
 
 def retrieve_memory(state: MultiAgentState):
     """Retrieve relevant memories based on the current user message."""
@@ -50,7 +78,7 @@ def retrieve_memory(state: MultiAgentState):
 
 
 
-def call_memory_agent(state: MultiAgentState):
+async def call_memory_agent(state: MultiAgentState):
     """Memory agent to manage long-term memory operations."""
     
     memory_history = state.get("memory_messages", [])
@@ -70,7 +98,7 @@ def call_memory_agent(state: MultiAgentState):
     print("==========================================================")   
     print("user message to memory agent:", next_msg.content) 
     print("==========================================================")
-    response = memory_agent.invoke(messages=memory_history,retrieved_memory_context= retrieved_memory_context, user_message=next_msg.content, supervisor_agent_message=supervisor_agent_message) 
+    response = await memory_agent.ainvoke(messages=memory_history,retrieved_memory_context= retrieved_memory_context, user_message=next_msg.content, supervisor_agent_message=supervisor_agent_message) 
     input_msgs = memory_history + [next_msg]
 
     print("=========================================================")
@@ -86,13 +114,13 @@ def call_memory_agent(state: MultiAgentState):
         "message_to_next_agent": None,
     } 
 
-def call_supervisor(state: MultiAgentState):
+async def call_supervisor(state: MultiAgentState):
     """Supervisor analyzes messages and decides next step."""
     # Prefer cleaned history if present, otherwise fall back to raw messages
     messages = state.get("core_messages") 
     retrieved_memory_context = state.get("retrieved_memory", "No relevant Context found.")
 
-    response = supervisor_agent.invoke(
+    response = await supervisor_agent.ainvoke(
         messages=messages,
         retrieved_memory=retrieved_memory_context,
     )
@@ -128,7 +156,7 @@ def call_supervisor(state: MultiAgentState):
     }
 
 
-def call_email_agent(state: MultiAgentState):
+async def call_email_agent(state: MultiAgentState):
     email_history = state.get("email_messages", [])
     next_msg = state.get("message_to_next_agent")
 
@@ -136,7 +164,7 @@ def call_email_agent(state: MultiAgentState):
         next_msg = state["messages"][-1]
 
     input_msgs = email_history + [next_msg]
-    response = email_agent.invoke(input_msgs)
+    response = await email_agent.ainvoke(input_msgs)
 
     return {
         "messages": state["messages"]+ [response],
@@ -148,7 +176,7 @@ def call_email_agent(state: MultiAgentState):
         "sheet_agent_response": None,
     }
 
-def call_calendar_agent(state: MultiAgentState):
+async def call_calendar_agent(state: MultiAgentState):
     cal_history = state.get("calendar_messages", [])
     next_msg = state.get("message_to_next_agent")
 
@@ -158,7 +186,7 @@ def call_calendar_agent(state: MultiAgentState):
     print("Calling calendar agent with:", next_msg)
 
     input_msgs = cal_history + [next_msg]
-    response = calendar_agent.invoke(input_msgs)
+    response = await calendar_agent.ainvoke(input_msgs)
 
     return {
         "messages": [response],
@@ -170,7 +198,7 @@ def call_calendar_agent(state: MultiAgentState):
         "sheet_agent_response": None,
     }
 
-def call_sheet_agent(state: MultiAgentState):
+async def call_sheet_agent(state: MultiAgentState):
     sheet_history = state.get("sheet_messages", [])
     next_msg = state.get("message_to_next_agent")
 
@@ -180,7 +208,7 @@ def call_sheet_agent(state: MultiAgentState):
     print("Calling sheet agent with:", next_msg)
 
     input_msgs = sheet_history + [next_msg]
-    response = sheet_agent.invoke(input_msgs)
+    response = await sheet_agent.ainvoke(input_msgs)
 
 
     return {
@@ -208,6 +236,8 @@ def clear_sub_agents_state(state: MultiAgentState):
         agent_summary = state["calendar_agent_response"]
     if state.get("sheet_agent_response"):
         agent_summary = state["sheet_agent_response"]
+    if state.get("browser_agent_response"):
+        agent_summary = state["browser_agent_response"]
     print("agent_summary:", agent_summary)
     core_messages: list = []
 
@@ -283,6 +313,7 @@ def sub_agent_should_continue(state: MultiAgentState) -> str:
     if last_tc_name in SHEET_TOOL_NAMES:
         return "to_sheet_tool"
     
+    
     return "back_to_supervisor"
 
 
@@ -318,6 +349,8 @@ def supervisor_agent_should_continue(state: "MultiAgentState") -> str:
         return "to_calendar_agent"
     elif route == "sheet_agent":
         return "to_sheet_agent"
+    elif route == "browser_agent":
+        return "to_browser_agent"
 
     return "end"
 
@@ -342,6 +375,8 @@ graph.add_node("sheet_tool_node", sheet_tool_node)
 graph.add_node("memory_tool_node", memory_tool_node)
 graph.add_node("clear_state", clear_sub_agents_state)
 graph.add_node("memory_agent", call_memory_agent)
+graph.add_node("browser_agent", call_browser_agent)
+
 # Supervisor conditional edges
 graph.add_conditional_edges(
     "supervisor",
@@ -350,6 +385,7 @@ graph.add_conditional_edges(
         "to_email_agent": "email_agent",
         "to_calendar_agent": "calendar_agent",
         "to_sheet_agent": "sheet_agent",
+        "to_browser_agent": "browser_agent",
         "end": "memory_agent"
     },
 )
@@ -391,6 +427,7 @@ graph.add_edge("calendar_tool_node", "calendar_agent")
 graph.add_edge("sheet_tool_node", "sheet_agent")
 graph.add_edge("memory_tool_node", "memory_agent")
 graph.add_edge("clear_state", "supervisor")
+graph.add_edge("browser_agent", "clear_state")
 
 graph.add_edge("retrieve_memory", "supervisor")
 graph.add_conditional_edges("memory_agent",
@@ -408,6 +445,72 @@ app = graph.compile(checkpointer=checkpointer)
 # ============================================================
 # Step 6: Run function (no changes needed)
 # ============================================================
+async def run_multi_agent_with_streaming():
+    """Run the multi-agent system interactively with streaming (Async)."""
+    print("\n" + "="*70)
+    print(" "*15 + "MULTI-AGENT SYSTEM RUNNING (STREAMING)")
+    print("="*70)
+    
+    # ... (Display agent info code remains the same) ...
+
+    thread_id = "multi_agent_thread"  
+    
+    while True:
+        # standard input() is blocking, but acceptable for a simple CLI test
+        user_input = input("\nYou: ").strip()
+        
+        if user_input.lower() == 'exit':
+            print("\n👋 Goodbye!\n")
+            break
+        
+        if not user_input:
+            continue
+        
+        inputs = {
+            "messages": [HumanMessage(content=user_input)], 
+            "core_messages": [HumanMessage(content=user_input)]
+        }
+        
+        config = {"configurable": {"thread_id": thread_id}}
+        
+        print("\n" + "-"*50)
+        
+        last_node_name = None
+
+        try:
+            # --- FIX: Use 'async for' and 'app.astream' ---
+            async for msg, metadata in app.astream(
+                inputs, 
+                config, 
+                stream_mode="messages" 
+            ):
+                # 1. Handle Streaming Tokens
+                if isinstance(msg, AIMessageChunk) and msg.content:
+                    node_name = metadata.get("langgraph_node", "Agent")
+                    
+                    if node_name != last_node_name:
+                        print(f"\n\n🤖 {node_name.upper()}: ", end="", flush=True)
+                        last_node_name = node_name
+                    
+                    print(msg.content, end="", flush=True)
+
+            print("\n" + "-"*50)
+
+            # 2. Retrieve Final State
+            # Note: app.get_state is still sync, which is fine here
+            snapshot = app.get_state(config)
+            
+            # ... (Rest of the printing logic remains the same) ...
+            supervisor_response = snapshot.values.get("supervisor_response")
+            if supervisor_response:
+                print("\n🧠 SUPERVISOR RESPONSE:\n" + "-" * 50)
+                print(supervisor_response)
+                print("-" * 50 + "\n")
+
+        except Exception as e:
+            print(f"\n❌ Error: {str(e)}\n")
+            import traceback
+            traceback.print_exc()
 
 def run_multi_agent():
     """Run the multi-agent system interactively."""
@@ -618,4 +721,4 @@ if __name__ == "__main__":
             print("Available commands: info, reload, inspect:<agent_name>, audio")
     else:
         # Default: interactive text mode
-        run_multi_agent()
+        asyncio.run(run_multi_agent_with_streaming())

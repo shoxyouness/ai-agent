@@ -1,4 +1,4 @@
-from typing import List, TypedDict, Annotated
+from typing import List, TypedDict, Annotated, Optional
 from langgraph.graph import add_messages
 from langchain_core.messages import BaseMessage
 
@@ -16,6 +16,10 @@ class MultiAgentState(TypedDict):
     email_messages: Annotated[List[BaseMessage], add_messages]
     calendar_messages: Annotated[List[BaseMessage], add_messages]
     memory_messages: Annotated[List[BaseMessage], add_messages]
+
+    browser_messages: List[BaseMessage] 
+    browser_agent_response: Optional[str]
+
 
     retrieved_memory : str
 
