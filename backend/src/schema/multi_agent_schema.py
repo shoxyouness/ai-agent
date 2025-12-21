@@ -1,4 +1,4 @@
-from typing import List, TypedDict, Annotated, Optional
+from typing import List, TypedDict, Annotated, Optional, Dict, Any
 from langgraph.graph import add_messages
 from langchain_core.messages import BaseMessage
 
@@ -29,3 +29,8 @@ class MultiAgentState(TypedDict):
     calendar_agent_response: str
     sheet_agent_response: str
     memory_agent_response: str
+
+    pending_email_tool_call: Optional[Dict[str, Any]]  # {"name": str, "args": dict, "id": str}
+    review_decision: Optional[str]                     # "approved" | "change_requested"
+    review_feedback: Optional[str]
+    reviewed_tool_args: Optional[Dict[str, Any]]       # if you later support "edit"
