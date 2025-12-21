@@ -66,7 +66,7 @@ async def _stream_graph(inputs_or_command, config):
 async def run_streaming_loop():
     """Runs the interactive text chat loop."""
     thread_id = "multi_agent_thread"
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": thread_id, "recursion_limit": 50}, }
     
     # Welcome Banner
     console.print(Panel.fit(
