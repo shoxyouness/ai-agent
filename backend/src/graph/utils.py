@@ -14,7 +14,7 @@ def get_tc_name(tc) -> str:
     return (getattr(tc, "name", "") or "").lower()
 
 
-def extract_last_tool_call_from_messages(messages):
+def extract_last_tool_call(messages):
     
     if not messages:
         return None

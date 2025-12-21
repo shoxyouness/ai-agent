@@ -11,7 +11,7 @@ from src.agents import (
     run_browser_task
 )
 from src.graph.consts import SENSITIVE_EMAIL_TOOLS
-from src.graph.utils import get_last_human_message, extract_last_tool_call_from_messages
+from src.graph.utils import get_last_human_message, extract_last_tool_call
 
 # --- 1. Helper for Parallel Tool Handling (Fixes 400 Error) ---
 def _get_agent_inputs(state: MultiAgentState, history_key: str):
@@ -120,7 +120,7 @@ async def call_sheet_agent(state: MultiAgentState):
 
 async def call_reviewer_agent(state: MultiAgentState):
     """Human-in-the-loop review node."""
-    pending = state.get("pending_email_tool_call") or extract_last_tool_call_from_messages(state.get("messages", []))
+    pending = state.get("pending_email_tool_call") or extract_last_tool_call(state.get("messages", []))
     
     if not pending or (pending.get("name") or "").lower() not in SENSITIVE_EMAIL_TOOLS:
         return {"review_decision": None}
@@ -273,4 +273,3 @@ def clear_sub_agents_state(state: MultiAgentState):
         "sheet_messages": [],
         "message_to_next_agent": None,
     }
-
