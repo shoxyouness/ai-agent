@@ -34,3 +34,5 @@ class MultiAgentState(TypedDict):
     review_decision: Optional[str]                     # "approved" | "change_requested"
     review_feedback: Optional[str]
     reviewed_tool_args: Optional[Dict[str, Any]]       # if you later support "edit"
+
+    bulk_approval_active: bool  

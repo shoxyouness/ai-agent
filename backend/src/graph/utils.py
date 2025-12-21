@@ -1,5 +1,14 @@
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
+def extract_all_tool_calls(messages):
+    """Extracts ALL tool calls from the last message, not just one."""
+    if not messages:
+        return []
+    last_msg = messages[-1]
+    tool_calls = getattr(last_msg, "tool_calls", [])
+    return tool_calls
+
+
 def get_last_human_message(messages):
     """Finds the last message from a human that isn't the Supervisor."""
     for msg in reversed(messages):

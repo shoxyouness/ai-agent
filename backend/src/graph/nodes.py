@@ -13,6 +13,9 @@ from src.agents import (
 from src.graph.consts import SENSITIVE_EMAIL_TOOLS
 from src.graph.utils import get_last_human_message, extract_last_tool_call
 
+
+from src.graph.utils import extract_all_tool_calls # Import the new helper
+
 # --- 1. Helper for Parallel Tool Handling (Fixes 400 Error) ---
 def _get_agent_inputs(state: MultiAgentState, history_key: str):
     """
@@ -119,7 +122,13 @@ async def call_sheet_agent(state: MultiAgentState):
 
 
 async def call_reviewer_agent(state: MultiAgentState):
-    """Human-in-the-loop review node."""
+    """Human-in-the-loop review node with Auto-Approval logic."""
+    
+    # 1. CHECK AUTO-APPROVAL FLAG
+    # If the user previously approved a batch, skip the UI and auto-approve.
+    if state.get("bulk_approval_active") is True:
+        return {"review_decision": "approved"}
+
     pending = state.get("pending_email_tool_call") or extract_last_tool_call(state.get("messages", []))
     
     if not pending or (pending.get("name") or "").lower() not in SENSITIVE_EMAIL_TOOLS:
@@ -129,7 +138,7 @@ async def call_reviewer_agent(state: MultiAgentState):
     args = pending.get("args", {})
     tool_id = pending.get("id")
 
-    # Nicer Markdown Draft
+    # Build Draft
     draft = (
         "# 📧 DRAFT EMAIL FOR REVIEW\n"
         f"**To:** `{args.get('to', '') or args.get('recipient', '')}`\n"
@@ -137,12 +146,13 @@ async def call_reviewer_agent(state: MultiAgentState):
         "──────────────────────────────\n\n"
         f"{args.get('body', '') or args.get('message', '')}\n"
         "\n──────────────────────────────\n"
+        "**Tip:** Type 'approved' to send this and auto-approve subsequent emails in this task."
     )
     
-    # 1) Interrupt
+    # 2. Interrupt for Human
     human_text = interrupt(draft)
 
-    # 2) Reviewer Agent
+    # 3. Reviewer Agent Logic
     review = await reviewer_agent.ainvoke([
         AIMessage(content=draft, name="reviewer_agent"),
         HumanMessage(content=str(human_text)),
@@ -151,26 +161,30 @@ async def call_reviewer_agent(state: MultiAgentState):
     updates = {
         "review_decision": review.decision,
         "review_feedback": review.feedback,
-        "messages": [], 
         "core_messages": state["core_messages"] + [
             AIMessage(content=f"[REVIEW] {review.decision}\n{review.feedback}", name="reviewer_agent")
         ],
     }
 
+    # 4. SET AUTO-APPROVAL FLAG
+    # If the user approved this email, we assume they trust the agent for the rest of THIS specific task sequence.
+    if review.decision == "approved":
+        updates["bulk_approval_active"] = True
+
     if review.decision == "change_requested":
-        rejection = ToolMessage(
-            content=f"User rejected the email draft. Feedback: {review.feedback}",
+        rejection_msg = ToolMessage(
+            content=f"User rejected draft. Feedback: {review.feedback}. Please Rewrite.",
             tool_call_id=tool_id,
             name=tool_name
         )
-        updates["email_messages"] = [rejection]
-        updates["messages"] = [rejection]
-        updates["message_to_next_agent"] = HumanMessage(
-            content=f"User requested changes: {review.feedback}. Rewrite the email.",
-            name="Supervisor",
-        )
+        updates["email_messages"] = state.get("email_messages", []) + [rejection_msg]
+        updates["messages"] = [rejection_msg]
+        updates["message_to_next_agent"] = None 
+        # Crucial: If they reject one, turn OFF auto-approval just in case
+        updates["bulk_approval_active"] = False
 
     return updates
+
 
 
 async def call_memory_agent(state: MultiAgentState):
@@ -220,34 +234,36 @@ async def call_browser_agent(state: MultiAgentState):
 # --- 3. Fix for the Infinite Loop (Supervisor Amnesia) ---
 def clear_sub_agents_state(state: MultiAgentState):
     """
-    Resets sub-agent history but creates a detailed summary for the Supervisor
-    including the ACTUAL Tool Results.
+    Resets sub-agent history but creates a detailed summary for the Supervisor.
+    Crucially, it marks tasks as COMPLETED so the Supervisor doesn't loop.
     """
     core = [m for m in state["messages"] 
             if isinstance(m, HumanMessage) or m.name in ("Supervisor", "sub_agent_task_summary")]
     
     summary_parts = []
 
-    # Helper to extract the last Tool Result from a specific agent's history
+    # Helper to extract the last Tool Result
     def get_tool_results_text(history):
         results = [m.content for m in reversed(history) if isinstance(m, ToolMessage)]
         if results:
-            return " | ".join(results) # Join multiple tool outputs
+            return " | ".join(results)
         return None
 
     # Check Email
     if state.get("email_agent_response"):
         agent_res = state["email_agent_response"]
         tool_res = get_tool_results_text(state.get("email_messages", []))
-        summary_parts.append(f"Email Agent said: '{agent_res}'")
-        if tool_res: summary_parts.append(f"(Tool Output: {tool_res})")
+        summary_parts.append(f"Email Agent Status: {agent_res}")
+        if tool_res: 
+            summary_parts.append(f"✅ ACTION COMPLETED (Tool Output): {tool_res}")
 
     # Check Calendar
     if state.get("calendar_agent_response"):
         agent_res = state["calendar_agent_response"]
         tool_res = get_tool_results_text(state.get("calendar_messages", []))
-        summary_parts.append(f"Calendar Agent said: '{agent_res}'")
-        if tool_res: summary_parts.append(f"(Tool Output: {tool_res})")
+        summary_parts.append(f"Calendar Agent Status: {agent_res}")
+        if tool_res: 
+            summary_parts.append(f"✅ ACTION COMPLETED (Tool Output): {tool_res}")
 
     # Check Sheet
     if state.get("sheet_agent_response"):
@@ -260,8 +276,21 @@ def clear_sub_agents_state(state: MultiAgentState):
     # Create the detailed summary message
     if summary_parts:
         content = "\n".join(summary_parts)
+        
+        # AGGRESSIVE SYSTEM INSTRUCTION TO STOP LOOPS
+        final_summary = (
+            "### SUBSYSTEM REPORT ###\n"
+            f"{content}\n"
+            "------------------------\n"
+            "⚠️ SYSTEM INSTRUCTION TO SUPERVISOR:\n"
+            "1. Analyze the 'ACTION COMPLETED' lines above.\n"
+            "2. If an action (like canceling meetings or sending email) is marked ✅, IT IS DONE.\n"
+            "3. DO NOT route back to the agent to do it again.\n"
+            "4. Proceed to the next step or finish."
+        )
+        
         summary_message = AIMessage(
-            content=f"[SUB_AGENT_SUMMARY]\n{content}", 
+            content=final_summary, 
             name="sub_agent_task_summary"
         )
         core.append(summary_message)
@@ -272,4 +301,5 @@ def clear_sub_agents_state(state: MultiAgentState):
         "calendar_messages": [],
         "sheet_messages": [],
         "message_to_next_agent": None,
+        "bulk_approval_active": False 
     }
