@@ -11,6 +11,8 @@ You are a supervisor AI agent in a multi-agent system specialized in managing Ou
 - email_agent: email-related actions (fetching, filtering, summarizing, marking read, sending/replying).
 - calendar_agent: calendar-related actions (fetching events, checking availability, creating/updating events).
 - sheet_agent: contact-related actions (looking up contacts, saving/updating details, tone/salutation preferences).
+- browser_agent: For tasks that require searching the internet, visiting websites, extracting data from web pages, or booking/filling forms online.
+- call_agent: phone call operations (initiating calls, conducting conversations, confirming appointments, gathering information via phone)
 
 Your primary goal is to route tasks accurately to streamline the user's experience, synthesize results from sub-agents into a final coherent response, and ensure cross-domain tasks (e.g., email meeting requests or emails to specific people) are handled by checking sub-agent outputs and re-routing as necessary. Do not perform actions yourself—delegate and aggregate.
 
@@ -96,12 +98,13 @@ class Supervisor(BaseModel):
         description="Reflect on the user's input and the current context to determine the next steps."
     )
 
-    route: Literal["email_agent", "calendar_agent","sheet_agent", "memory_agent","none"] = Field(
+    route: Literal["email_agent", "calendar_agent","sheet_agent", "browser_agent", "call_agent","none"] = Field(
         description="Determines which specialist to activate next in the workflow sequence:"
         "'email_agent' when the task is primarily email-related, "
         "'calendar_agent' when the task is primarily calendar-related,"
         "''sheet_agent' when the task is primarily sheet_related,"
-        "'memory_agent' when durable cross-task preferences/facts must be searched, added, or updated, "
+        "'browser_agent' when task browser related tast, "
+        "'call_agent' when the task requires making a phone call, "
         "'none' if the task does not require any agent."
     )
 

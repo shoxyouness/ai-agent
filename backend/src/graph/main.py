@@ -27,6 +27,14 @@ from src.tools.memory_tools import search_memory
 from src.utils.audio_utils import transcribe_audio_file, tts_to_file, AUDIO_INPUT_PATH, AUDIO_OUTPUT_PATH
 from langgraph.types import interrupt
 
+
+
+# Add to imports at top:
+from src.agents.call_agent import call_agent
+from src.utils.call_session_manager import call_session_manager
+
+
+from src.tools.call_tools import end_call
 load_dotenv()
 
 
@@ -34,12 +42,19 @@ email_tools =email_agent.tools
 calendar_tools = calendar_agent.tools
 sheet_tools = sheet_agent.tools
 memory_tools = memory_agent.tools
+call_tools = call_agent.tools
+from src.tools.call_tools import CALL_TOOLS
+
+# Create tool node for call agent:
+call_tool_node = ToolNode(tools=call_tools)
+CALL_TOOL_NAMES = {t.name.lower() for t in call_tools}
 
 print(f"✓ Initialized {supervisor_agent.name}")
 print(f"✓ Initialized {email_agent.name} with {len(email_agent.tools)} tools")
 print(f"✓ Initialized {calendar_agent.name} with {len(calendar_agent.tools)} tools")
 print(f"✓ Initialized {sheet_agent.name} with {len(sheet_agent.tools)} tools")
 
+print(f"✓ Initialized {call_agent.name} with {len(call_agent.tools)} tools")
 
 def strip_tool_calls(history):
     """Remove AI messages with tool_calls to avoid OpenAI 400 during rewrite."""
@@ -239,6 +254,213 @@ async def call_sheet_agent(state: MultiAgentState):
         "calendar_agent_response": None,
     }
 
+async def call_call_agent(state: MultiAgentState):
+    """
+    Call agent that manages the full lifecycle of a phone call.
+    """
+    call_history = state.get("call_messages", [])
+    next_msg = state.get("message_to_next_agent") or state["messages"][-1]
+    active_sid = state.get("active_call_sid")
+
+    print(f"📞 Call Agent - Current state: active_sid={active_sid}")
+
+    # 1. Check if we have an active call in progress
+    if active_sid:
+        session = call_session_manager.get_session(active_sid)
+        
+        if session:
+            print(f"📊 Session status: {session.status}, duration: {session.get_duration_seconds()}s, turns: {len(session.conversation_history)}")
+            
+            # Call is still ongoing
+            if session.status == "active":
+                duration = session.get_duration_seconds()
+                
+                # IMPORTANT: Add delay to avoid tight loop
+                print(f"⏳ Waiting 5 seconds for call to progress...")
+                await asyncio.sleep(5)  # Give call time to progress
+                
+                # Check if call has minimum activity or duration
+                # Option 1: Wait for at least one conversation turn
+                if len(session.conversation_history) < 2 and duration < 60:
+                    print(f"🔄 Call still initializing (turns: {len(session.conversation_history)}, duration: {duration}s)")
+                    return {
+                        "messages": [AIMessage(
+                            content=f"Call in progress, waiting for conversation to start... ({duration}s elapsed)",
+                            name="call_agent"
+                        )],
+                        "core_messages": state["core_messages"],
+                        "call_messages": call_history,
+                        "call_agent_response": f"Call initializing ({duration}s)",
+                        "active_call_sid": active_sid,
+                        "message_to_next_agent": None,
+                    }
+                
+                # Option 2: If we have conversation turns, check if it's wrapping up
+                if len(session.conversation_history) >= 2:
+                    # Check last messages for completion signals
+                    last_messages = session.conversation_history[-3:]
+                    last_text = " ".join([m['content'].lower() for m in last_messages])
+                    
+                    completion_signals = [
+                        "goodbye", "thank you", "thanks", "bye",
+                        "confirmed", "perfect", "sounds good",
+                        "can't make it", "won't be able", "sorry"
+                    ]
+                    
+                    if any(signal in last_text for signal in completion_signals):
+                        print(f"✅ Detected completion signal, ending call")
+                        # End the call gracefully
+                        try:
+                            end_call.invoke({"call_sid": active_sid})
+                        except Exception as e:
+                            print(f"⚠️ Error ending call: {e}")
+                        
+                        summary = call_session_manager.get_call_summary(active_sid)
+                        call_session_manager.end_session(active_sid)
+                        
+                        return {
+                            "messages": [AIMessage(
+                                content=f"✅ Call completed successfully!\n\nSummary:\n- Duration: {summary.get('duration_seconds')}s\n- Outcome: {summary.get('outcome')}\n- Sentiment: {summary.get('sentiment')}\n\nTranscript:\n{summary.get('transcript', 'N/A')}",
+                                name="call_agent"
+                            )],
+                            "core_messages": state["core_messages"] + [AIMessage(
+                                content=f"Call completed: {summary.get('outcome')}",
+                                name="call_agent"
+                            )],
+                            "call_messages": call_history,
+                            "call_agent_response": f"Call completed: {summary.get('outcome')}",
+                            "active_call_sid": None,
+                            "message_to_next_agent": None,
+                        }
+                
+                # Option 3: Maximum duration check (timeout)
+                if duration > 120:  # 2 minutes max
+                    print(f"⏰ Call timeout reached ({duration}s), ending call")
+                    try:
+                        end_call.invoke({"call_sid": active_sid})
+                    except Exception:
+                        pass
+                    
+                    summary = call_session_manager.get_call_summary(active_sid)
+                    call_session_manager.end_session(active_sid)
+                    
+                    return {
+                        "messages": [AIMessage(
+                            content=f"Call ended (timeout after {duration}s). Summary:\n{json.dumps(summary, indent=2)}",
+                            name="call_agent"
+                        )],
+                        "core_messages": state["core_messages"] + [AIMessage(
+                            content=f"Call timeout: {summary.get('outcome')}",
+                            name="call_agent"
+                        )],
+                        "call_messages": call_history,
+                        "call_agent_response": f"Call timeout: {summary.get('outcome')}",
+                        "active_call_sid": None,
+                        "message_to_next_agent": None,
+                    }
+                
+                # Continue monitoring
+                return {
+                    "messages": [AIMessage(
+                        content=f"Call ongoing... (duration: {duration}s, turns: {len(session.conversation_history)})",
+                        name="call_agent"
+                    )],
+                    "core_messages": state["core_messages"],
+                    "call_messages": call_history,
+                    "call_agent_response": f"Call active ({len(session.conversation_history)} turns)",
+                    "active_call_sid": active_sid,
+                    "message_to_next_agent": None,
+                }
+            
+            # Call ended (completed, failed, etc.)
+            elif session.status in ["completed", "failed", "busy", "no-answer"]:
+                print(f"✅ Call {active_sid} ended with status: {session.status}")
+                summary = call_session_manager.get_call_summary(active_sid)
+                call_session_manager.end_session(active_sid)
+                
+                return {
+                    "messages": [AIMessage(
+                        content=f"Call ended ({session.status}).\n\nSummary:\n{json.dumps(summary, indent=2)}",
+                        name="call_agent"
+                    )],
+                    "core_messages": state["core_messages"] + [AIMessage(
+                        content=f"Call completed with status: {session.status}",
+                        name="call_agent"
+                    )],
+                    "call_messages": call_history,
+                    "call_agent_response": f"Call ended: {session.status}",
+                    "active_call_sid": None,
+                    "message_to_next_agent": None,
+                }
+        else:
+            # Session not found, clear the SID
+            print(f"⚠️ Session not found for {active_sid}, clearing")
+            return {
+                "messages": [AIMessage(
+                    content="Call session not found or already completed.",
+                    name="call_agent"
+                )],
+                "core_messages": state["core_messages"],
+                "call_messages": call_history,
+                "call_agent_response": "Call session ended",
+                "active_call_sid": None,
+                "message_to_next_agent": None,
+            }
+
+    # 2. No active call, so run the agent to potentially start one
+    print(f"📞 Call Agent working on: {next_msg.content}")
+    input_msgs = call_history + [next_msg]
+    response = await call_agent.ainvoke(input_msgs)
+
+    # 3. Extract call_sid from tool response if call was initiated
+    new_call_sid = active_sid
+    if response.tool_calls:
+        for tc in response.tool_calls:
+            if tc.get("name") == "initiate_call":
+                new_call_sid = "pending"
+                break
+
+    return {
+        "messages": [response],
+        "core_messages": state["core_messages"] + [response],
+        "call_messages": call_history + [next_msg, response],
+        "call_agent_response": response.content,
+        "message_to_next_agent": None,
+        "active_call_sid": new_call_sid,
+    }
+
+
+
+def store_call_sid(state: MultiAgentState):
+    """
+    Extract call_sid from tool response and store it.
+    This runs after the call_tool_node executes.
+    """
+    msgs = state.get("messages") or []
+    if not msgs:
+        return {}
+
+    last = msgs[-1]
+    if not isinstance(last, ToolMessage):
+        return {}
+
+    try:
+        data = json.loads(last.content)
+        sid = data.get("call_sid")
+        if sid:
+            print(f"📌 Storing call_sid: {sid}")
+            # Mark the session as tracked
+            session = call_session_manager.get_session(sid)
+            if session:
+                session.status = "active"
+            return {"active_call_sid": sid}
+    except Exception as e:
+        print(f"⚠️ Error storing call_sid: {e}")
+    
+    return {}
+
+
+
 
 SENSITIVE_EMAIL_TOOLS = {"send_email", "reply_to_email"}  
 
@@ -369,6 +591,8 @@ def clear_sub_agents_state(state: MultiAgentState):
         agent_summary = state["sheet_agent_response"]
     if state.get("browser_agent_response"):
         agent_summary = state["browser_agent_response"]
+    if state.get("call_agent_response"):
+         agent_summary = state["call_agent_response"]
     print("agent_summary:", agent_summary)
     core_messages: list = []
 
@@ -420,6 +644,29 @@ def _get_tc_name(tc) -> str:
 
 
 def sub_agent_should_continue(state: MultiAgentState) -> str:
+    """
+    Route sub-agents based on their actions.
+    Special handling for call agent to maintain conversation loop.
+    """
+    # Check if we have an active call
+    active_sid = state.get("active_call_sid")
+    if active_sid and active_sid != "pending":
+        session = call_session_manager.get_session(active_sid)
+        if session and session.status == "active":
+            duration = session.get_duration_seconds()
+            turns = len(session.conversation_history)
+            
+            # Continue monitoring if:
+            # - Call is less than 2 minutes old AND
+            # - Either hasn't started talking yet OR still in conversation
+            if duration < 120 and (turns < 2 or turns < 10):
+                print(f"🔄 Call active (duration: {duration}s, turns: {turns}), continuing monitoring")
+                return "back_to_call_agent"
+            else:
+                print(f"🏁 Call reached monitoring limit, returning to supervisor")
+                return "back_to_supervisor"
+
+    # Normal tool routing
     msgs = state.get("messages") or []
     if not msgs:
         return "back_to_supervisor"
@@ -432,7 +679,6 @@ def sub_agent_should_continue(state: MultiAgentState) -> str:
     last_tc_name = _get_tc_name(tcs[-1])
     print(f"[router] last tool call: {last_tc_name}")
 
-    # ✅ intercept sensitive email actions
     if last_tc_name in SENSITIVE_EMAIL_TOOLS:
         return "to_reviewer_agent"
 
@@ -442,8 +688,11 @@ def sub_agent_should_continue(state: MultiAgentState) -> str:
         return "to_calendar_tool"
     if last_tc_name in SHEET_TOOL_NAMES:
         return "to_sheet_tool"
+    if last_tc_name in CALL_TOOL_NAMES:
+        return "to_call_tool"
 
     return "back_to_supervisor"
+
 
 
 def memory_agent_should_continue(state: MultiAgentState) -> str:
@@ -469,19 +718,22 @@ def memory_agent_should_continue(state: MultiAgentState) -> str:
     return "end"
 
 def supervisor_agent_should_continue(state: "MultiAgentState") -> str:
-
     route = state.get("route", "none")
-
+    
     if route == "email_agent":
         return "to_email_agent"
     elif route == "calendar_agent":
         return "to_calendar_agent"
     elif route == "sheet_agent":
         return "to_sheet_agent"
+    elif route == "call_agent":
+        return "to_call_agent"
     elif route == "browser_agent":
         return "to_browser_agent"
-
+    
     return "end"
+
+
 
 def reviewer_should_continue(state: MultiAgentState) -> str:
     decision = (state.get("review_decision") or "").lower()
@@ -517,6 +769,11 @@ graph.add_node("browser_agent", call_browser_agent)
 
 graph.add_node("reviewer_agent", call_reviewer_agent)
 
+graph.add_node("call_agent", call_call_agent)
+graph.add_node("call_tool_node", call_tool_node)
+graph.add_node("store_call_sid", store_call_sid)
+
+
 
 # Supervisor conditional edges
 graph.add_conditional_edges(
@@ -527,7 +784,19 @@ graph.add_conditional_edges(
         "to_calendar_agent": "calendar_agent",
         "to_sheet_agent": "sheet_agent",
         "to_browser_agent": "browser_agent",
+        "to_call_agent": "call_agent",
+
         "end": "memory_agent"
+    },
+)
+
+graph.add_conditional_edges(
+    "call_agent",
+    sub_agent_should_continue,
+    {
+        "to_call_tool": "call_tool_node",
+        "back_to_call_agent": "call_agent",  # NEW: Loop back for active calls
+        "back_to_supervisor": "clear_state"
     },
 )
 
@@ -588,7 +857,8 @@ graph.add_conditional_edges("memory_agent",
         "to_memory_tool": "memory_tool_node",
         "end": END
     },)
-
+graph.add_edge("call_tool_node", "store_call_sid")
+graph.add_edge("store_call_sid", "call_agent")  # Changed from direct return
 # Compile the graph
 checkpointer = MemorySaver()
 app = graph.compile(checkpointer=checkpointer)

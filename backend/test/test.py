@@ -1,68 +1,43 @@
-import os, sys, json, asyncio, shutil
-from dotenv import load_dotenv
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+import asyncio
+import os
 
-load_dotenv()
+from browser_use import Agent, Browser, ChatOpenAI
 
-REQUIRED = [
-    "project_id", "private_key_id", "private_key",
-    "client_email", "client_id", "client_x509_cert_url",
-]
-
-def load_sa_json():
-    p = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if p and os.path.exists(p):
-        with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-SA = load_sa_json()
-def env_or_sa(k): return os.getenv(k) or SA.get(k)
-
-def make_params(env: dict) -> StdioServerParameters:
-    if shutil.which("uvx"):
-        return StdioServerParameters(
-            command="uvx",
-            args=["google-sheets-mcp@latest"],
-            env=env,
-        )
-    return StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "gsheet_mcp_server"],
-        env=env,
-    )
 
 async def main():
-    # Build the child-process environment (what the server expects)
-    server_env = {k: env_or_sa(k) for k in REQUIRED}
-    miss = [k for k,v in server_env.items() if not v]
-    if miss:
-        raise SystemExit(f"Missing creds: {miss} "
-                         "(put them in .env OR set GOOGLE_APPLICATION_CREDENTIALS to the SA JSON)")
+    # Make sure OPENAI_API_KEY is set in your environment
+    llm = ChatOpenAI(
+        model="gpt-4o",
+        temperature=0,
+    )
 
-    # If private_key is in .env, it must be ONE LINE with literal \n
-    params = make_params(server_env)
+    browser = Browser(
+        headless=False,
+    )
 
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            # Initialize (handle different mcp versions)
-            initialized = False
-            for kwargs in ({"environment": server_env}, {}):
-                try:
-                    await session.initialize(**kwargs)
-                    initialized = True
-                    break
-                except TypeError:
-                    continue
-            if not initialized:
-                raise RuntimeError("Failed to initialize MCP session (unexpected mcp version).")
+    agent = Agent(
+        task=(
+            "open weakpedia and search for 'LangGraph'. "
+          
+        ),
+        llm=llm,        # ⬅ LangChain model now passed directly
+        browser=browser,
+    )
 
-            resp = await session.list_tools()
-            tools = getattr(resp, "tools", []) or []
-            print("Tools:")
-            for t in tools:
-                print("-", t.name)
+    history = await agent.run(max_steps=50)
+    print ("\n=== FULL HISTORY ===")
+    print(history)
+
+    print("\n=== FINAL RESULT ===")
+    print(history.final_result())
+
+    print("\nDuration (s):", history.total_duration_seconds())
+    print("Steps:", history.number_of_steps())
+
+    if history.has_errors():
+        print("\n=== ERRORS ===")
+        print(history.errors())
+
 
 if __name__ == "__main__":
     asyncio.run(main())
