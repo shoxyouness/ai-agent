@@ -5,10 +5,19 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from dotenv import load_dotenv
 from src.utils.ms_graph import get_access_token, MS_GRAPH_BASE_URL
-from src.schema.email_agent_schema import Email
 from bs4 import BeautifulSoup
 
 
+
+class Email(BaseModel):
+    """A schema for a single email message."""
+    sender: str = Field(description="The name and email address of the sender.")
+    subject: str = Field(description="The subject line of the email.")
+    body_preview: str = Field(description="A snippet of the email body.")
+    message_id: str = Field(description="The unique identifier of the email message.")
+
+
+    
 @tool
 def send_email(to: str, subject: str, body: str, cc: Optional[List[str]] = None, bcc: Optional[List[str]] = None) -> str:
     """

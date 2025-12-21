@@ -139,9 +139,24 @@ class BaseAgent(ABC):
         input_dict.update(kwargs)
         return self.chain.invoke(input_dict)
 
-    async def ainvoke(self, messages: List[BaseMessage]) -> AIMessage:
+    async def ainvoke(self, messages: List[BaseMessage], **kwargs) -> AIMessage:
+        input_dict = {"messages": messages}
+        input_dict.update(kwargs)
+        return await self.chain.ainvoke(input_dict)
+    
 
-        return await self.chain.ainvoke({"messages": messages})
+    def stream(self, messages: List[BaseMessage], **kwargs):
+        """Stream the response from the agent."""
+        input_dict = {"messages": messages}
+        input_dict.update(kwargs)
+        return self.chain.stream(input_dict)
+
+    async def astream(self, messages: List[BaseMessage], **kwargs):
+        """Async stream the response from the agent."""
+        input_dict = {"messages": messages}
+        input_dict.update(kwargs)
+        async for chunk in self.chain.astream(input_dict):
+            yield chunk
 
     # ------------------------ Tools helpers ------------------------
 
