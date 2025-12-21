@@ -14,7 +14,8 @@ from src.agents import (
     sheet_agent,
     supervisor_agent,
     memory_agent,
-    run_browser_task
+    run_browser_task,
+    reviewer_agent,
 )
 
 from src.schema.multi_agent_schema import MultiAgentState
@@ -24,6 +25,7 @@ from src.tools.memory_tools import search_memory
 
 # import audi utils for transcription and TTS
 from src.utils.audio_utils import transcribe_audio_file, tts_to_file, AUDIO_INPUT_PATH, AUDIO_OUTPUT_PATH
+from langgraph.types import interrupt
 
 load_dotenv()
 
@@ -37,6 +39,22 @@ print(f"✓ Initialized {supervisor_agent.name}")
 print(f"✓ Initialized {email_agent.name} with {len(email_agent.tools)} tools")
 print(f"✓ Initialized {calendar_agent.name} with {len(calendar_agent.tools)} tools")
 print(f"✓ Initialized {sheet_agent.name} with {len(sheet_agent.tools)} tools")
+
+
+def strip_tool_calls(history):
+    """Remove AI messages with tool_calls to avoid OpenAI 400 during rewrite."""
+    cleaned = []
+    for m in history:
+        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
+            # drop it (it's an unfulfilled tool call)
+            continue
+        if isinstance(m, ToolMessage):
+            # also drop tool messages if you dropped their call (optional)
+            continue
+        cleaned.append(m)
+    return cleaned
+
+
 
 # ============================================================
 # Step 2: Define agent call functions
@@ -222,6 +240,119 @@ async def call_sheet_agent(state: MultiAgentState):
     }
 
 
+SENSITIVE_EMAIL_TOOLS = {"send_email", "reply_to_email"}  
+
+
+def _extract_last_tool_call_from_messages(state: MultiAgentState):
+    msgs = state.get("messages") or []
+    if not msgs:
+        return None
+    last = msgs[-1]
+    tcs = getattr(last, "tool_calls", None) or []
+    if not tcs:
+        return None
+
+    tc = tcs[-1]
+    # ToolCall can be dict-like or object-like depending on version
+    if isinstance(tc, dict):
+        return {"name": tc.get("name"), "args": tc.get("args") or {}, "id": tc.get("id")}
+    return {
+        "name": getattr(tc, "name", None),
+        "args": getattr(tc, "args", None) or {},
+        "id": getattr(tc, "id", None),
+    }
+
+async def call_reviewer_agent(state: MultiAgentState):
+    """
+    HITL review step:
+    - show draft
+    - wait for human input
+    - return approved -> continue to email tool node
+      change_requested -> go back to email_agent with feedback
+    """
+    pending = state.get("pending_email_tool_call") or _extract_last_tool_call_from_messages(state)
+    if not pending or (pending.get("name") or "").lower() not in SENSITIVE_EMAIL_TOOLS:
+        # nothing to review
+        return {"review_decision": None, "review_feedback": None, "pending_email_tool_call": None}
+
+    tool_name = (pending["name"] or "").lower()
+    args = pending.get("args", {})
+    tool_id = pending.get("id")
+
+    # Build a readable draft for the human
+    to = args.get("to") or args.get("recipient") or ""
+    subject = args.get("subject") or ""
+    body = args.get("body") or args.get("message") or ""
+
+    draft = (
+        "📧 DRAFT EMAIL FOR REVIEW\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Tool: {tool_name}\n"
+        f"To: {to}\n"
+        f"Subject: {subject}\n\n"
+        f"{body}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Reply with:\n"
+        "- 'approved' to send\n"
+        "- or write your requested changes\n"
+    )
+    print(draft)
+    
+    # 1) Show draft + pause graph (human input)
+    human_text = interrupt(draft)
+
+    # 2) Let your reviewer agent classify the human input
+    review = await reviewer_agent.ainvoke(
+        [
+            AIMessage(content=draft, name="reviewer_agent"),
+            HumanMessage(content=str(human_text)),
+        ]
+    )
+    
+    decision = review.decision
+    feedback = review.feedback
+    
+    out = {
+        "review_decision": decision,
+        "review_feedback": feedback,
+        "messages": [], 
+        "core_messages": state["core_messages"] + [
+            AIMessage(content=f"[REVIEW] {decision}\n{feedback}", name="reviewer_agent")
+        ],
+    }
+
+    if decision == "change_requested":
+        # ---------------------------------------------------------
+        # CRITICAL FIX: Satisfy OpenAI's tool_call requirement
+        # ---------------------------------------------------------
+        # We must insert a ToolMessage so the history looks like:
+        # AI: call_tool(id=123) -> Tool: "User rejected..."(id=123)
+        
+        rejection_msg = ToolMessage(
+            content=f"User rejected the email draft. Feedback: {feedback}",
+            tool_call_id=tool_id,
+            name=tool_name
+        )
+
+        # We append this message to the 'email_messages' state so the email_agent
+        # sees that its previous tool call 'completed' (albeit with a rejection).
+        # Note: Since MultiAgentState uses add_messages, passing a list appends it.
+        out["email_messages"] = [rejection_msg]
+        
+        # Also add to global messages for consistency
+        out["messages"] = [rejection_msg]
+
+        # ---------------------------------------------------------
+        
+        out["message_to_next_agent"] = HumanMessage(
+            content=f"User requested changes:\n{feedback}\n\nRewrite the email draft based on this feedback.",
+            name="Supervisor",
+        )
+
+    return out
+
+
+
 def clear_sub_agents_state(state: MultiAgentState):
     """
     Build a cleaned 'core_messages' history containing:
@@ -289,31 +420,29 @@ def _get_tc_name(tc) -> str:
 
 
 def sub_agent_should_continue(state: MultiAgentState) -> str:
-    """
-    Determine if sub-agent should call tools or return to supervisor.
-    """
     msgs = state.get("messages") or []
     if not msgs:
         return "back_to_supervisor"
-    
+
     last = msgs[-1]
     tcs = getattr(last, "tool_calls", None) or []
-    
     if not tcs:
         return "back_to_supervisor"
-    
+
     last_tc_name = _get_tc_name(tcs[-1])
     print(f"[router] last tool call: {last_tc_name}")
-    
-    # Route to appropriate tool node based on tool name
+
+    # ✅ intercept sensitive email actions
+    if last_tc_name in SENSITIVE_EMAIL_TOOLS:
+        return "to_reviewer_agent"
+
     if last_tc_name in EMAIL_TOOL_NAMES:
         return "to_email_tool"
     if last_tc_name in CAL_TOOL_NAMES:
         return "to_calendar_tool"
     if last_tc_name in SHEET_TOOL_NAMES:
         return "to_sheet_tool"
-    
-    
+
     return "back_to_supervisor"
 
 
@@ -354,6 +483,15 @@ def supervisor_agent_should_continue(state: "MultiAgentState") -> str:
 
     return "end"
 
+def reviewer_should_continue(state: MultiAgentState) -> str:
+    decision = (state.get("review_decision") or "").lower()
+    if decision == "approved":
+        return "to_email_tool"          # ✅ go execute tool now
+    if decision == "change_requested":
+        return "back_to_email_agent"
+    return "back_to_supervisor"
+
+
 # ============================================================
 # Step 5: Build the graph (no changes needed)
 # ============================================================
@@ -377,6 +515,9 @@ graph.add_node("clear_state", clear_sub_agents_state)
 graph.add_node("memory_agent", call_memory_agent)
 graph.add_node("browser_agent", call_browser_agent)
 
+graph.add_node("reviewer_agent", call_reviewer_agent)
+
+
 # Supervisor conditional edges
 graph.add_conditional_edges(
     "supervisor",
@@ -395,8 +536,19 @@ graph.add_conditional_edges(
     "email_agent",
     sub_agent_should_continue,
     {
+        "to_reviewer_agent": "reviewer_agent",
         "to_email_tool": "email_tool_node",
         "back_to_supervisor": "clear_state"
+    },
+)
+
+graph.add_conditional_edges(
+    "reviewer_agent",
+    reviewer_should_continue,
+    {
+        "to_email_tool": "email_tool_node",
+        "back_to_email_agent": "email_agent",
+        "back_to_supervisor": "clear_state",
     },
 )
 
@@ -445,73 +597,53 @@ app = graph.compile(checkpointer=checkpointer)
 # ============================================================
 # Step 6: Run function (no changes needed)
 # ============================================================
-async def run_multi_agent_with_streaming():
-    """Run the multi-agent system interactively with streaming (Async)."""
-    print("\n" + "="*70)
-    print(" "*15 + "MULTI-AGENT SYSTEM RUNNING (STREAMING)")
-    print("="*70)
-    
-    # ... (Display agent info code remains the same) ...
+from langgraph.types import Command
 
-    thread_id = "multi_agent_thread"  
-    
+async def run_multi_agent_with_streaming():
+    thread_id = "multi_agent_thread"
+    config = {"configurable": {"thread_id": thread_id}}
+
     while True:
-        # standard input() is blocking, but acceptable for a simple CLI test
         user_input = input("\nYou: ").strip()
-        
-        if user_input.lower() == 'exit':
-            print("\n👋 Goodbye!\n")
+        if user_input.lower() == "exit":
             break
-        
         if not user_input:
             continue
-        
+
+        # ✅ Start normal run
         inputs = {
-            "messages": [HumanMessage(content=user_input)], 
-            "core_messages": [HumanMessage(content=user_input)]
+            "messages": [HumanMessage(content=user_input)],
+            "core_messages": [HumanMessage(content=user_input)],
         }
-        
-        config = {"configurable": {"thread_id": thread_id}}
-        
-        print("\n" + "-"*50)
-        
-        last_node_name = None
 
-        try:
-            # --- FIX: Use 'async for' and 'app.astream' ---
-            async for msg, metadata in app.astream(
-                inputs, 
-                config, 
-                stream_mode="messages" 
-            ):
-                # 1. Handle Streaming Tokens
-                if isinstance(msg, AIMessageChunk) and msg.content:
-                    node_name = metadata.get("langgraph_node", "Agent")
-                    
-                    if node_name != last_node_name:
-                        print(f"\n\n🤖 {node_name.upper()}: ", end="", flush=True)
-                        last_node_name = node_name
-                    
-                    print(msg.content, end="", flush=True)
+        await _run_stream(app, inputs, config)
 
-            print("\n" + "-"*50)
-
-            # 2. Retrieve Final State
-            # Note: app.get_state is still sync, which is fine here
+        # ✅ If graph is waiting at an interrupt, RESUME instead of starting a new chat
+        while True:
             snapshot = app.get_state(config)
-            
-            # ... (Rest of the printing logic remains the same) ...
-            supervisor_response = snapshot.values.get("supervisor_response")
-            if supervisor_response:
-                print("\n🧠 SUPERVISOR RESPONSE:\n" + "-" * 50)
-                print(supervisor_response)
-                print("-" * 50 + "\n")
+            # If your reviewer node interrupted, snapshot.next will still include that node
+            # (exact content depends on version, but snapshot.next being non-empty is a key signal)
+            if not snapshot.next:
+                break
 
-        except Exception as e:
-            print(f"\n❌ Error: {str(e)}\n")
-            import traceback
-            traceback.print_exc()
+            # Ask human for the interrupt response (approve / changes)
+            human_reply = input("\n🧍 Review required. Type 'approved' or your changes:\n> ").strip()
 
+            # 🔥 Resume the same run (same thread_id) with Command(resume=...)
+            await _run_stream(app, Command(resume=human_reply), config)
+
+
+async def _run_stream(app, inputs_or_command, config):
+    last_node_name = None
+    async for msg, metadata in app.astream(inputs_or_command, config, stream_mode="messages"):
+        if isinstance(msg, AIMessageChunk) and msg.content:
+            node_name = metadata.get("langgraph_node", "Agent")
+            if node_name != last_node_name:
+                print(f"\n\n🤖 {node_name.upper()}: ", end="", flush=True)
+                last_node_name = node_name
+            print(msg.content, end="", flush=True)
+    print()
+    
 def run_multi_agent():
     """Run the multi-agent system interactively."""
     print("\n" + "="*70)
