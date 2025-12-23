@@ -45,6 +45,50 @@ def _get_agent_inputs(state: MultiAgentState, history_key: str):
         
     return history + [next_msg]
 
+
+# def _get_agent_inputs(state: MultiAgentState, history_key: str):
+#     """
+#     Constructs inputs for an agent, ensuring valid Tool Call -> Tool Message sequences.
+#     """
+#     history = state.get(history_key, [])
+#     all_messages = state.get("messages", [])
+
+#     # 1. Check if history is currently "hanging" (Last message was a Tool Call with no Output)
+#     if history and isinstance(history[-1], AIMessage) and history[-1].tool_calls:
+#         # We MUST find the matching ToolMessage in the global stream
+#         hanging_ids = {tc['id'] for tc in history[-1].tool_calls}
+        
+#         found_tool_outputs = []
+#         for msg in reversed(all_messages):
+#             if isinstance(msg, ToolMessage) and msg.tool_call_id in hanging_ids:
+#                 found_tool_outputs.insert(0, msg)
+        
+#         # If we found outputs that aren't in history yet, append them
+#         if found_tool_outputs:
+#             return history + found_tool_outputs
+    
+#     # 2. Standard Parallel Tool Handling (from global stream)
+#     # If the global stream has recent tool messages that aren't in history, grab them
+#     recent_tool_messages = []
+#     for msg in reversed(all_messages):
+#         if isinstance(msg, ToolMessage):
+#             recent_tool_messages.insert(0, msg)
+#         else:
+#             break
+            
+#     if recent_tool_messages:
+#         # Check if they are already in history to avoid duplicates
+#         if history and history[-1] == recent_tool_messages[-1]:
+#             return history
+#         return history + recent_tool_messages
+    
+#     # 3. Standard Case: Append Supervisor Instruction
+#     next_msg = state.get("message_to_next_agent")
+#     if not next_msg:
+#         next_msg = all_messages[-1] 
+        
+#     return history + [next_msg]
+
 # --- 2. Generic Agent Wrapper ---
 async def call_agent_generic(state: MultiAgentState, agent, history_key: str, response_key: str):
     """Generic handler for Email, Calendar, and Sheet agents."""
