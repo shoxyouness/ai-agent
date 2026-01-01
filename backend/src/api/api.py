@@ -11,8 +11,17 @@ from langgraph.types import Command
 
 # Import your graph builder
 from src.graph.workflow import build_graph
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from src.config.memory_config import get_memory_instance
 
-app = FastAPI(title="Multi-Agent Orchestrator API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.memory = get_memory_instance()  
+    yield
+
+
+app = FastAPI(title="Multi-Agent Orchestrator API",lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
