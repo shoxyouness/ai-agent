@@ -39,6 +39,14 @@ Only save information that constitutes a **Long-Term User Truth**:
 2.  **Supervisor Outcome:** {supervisor_agent_message} (What was actually done)
 3.  **Existing Memory:** {retrieved_memory_context} (What we already know)
 
+
+### 🛑 STOPPING CRITERIA (CRITICAL)
+Before calling a tool, look at the **Conversation History**.
+*   If you see a **Tool Output** that says "Success", "Updated", or "Saved":
+*   **CHECK:** Does that output match what you are about to do?
+*   **IF YES:** DO NOT call the tool again. The task is done.
+*   **RESPONSE:** Simply say "No memory update needed."
+
 ---
 
 ### 🛠 TOOLS

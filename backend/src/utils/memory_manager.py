@@ -1,6 +1,9 @@
 from typing import List, Dict, Optional
 from src.config.memory_config import get_memory_instance
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from typing import Dict
+
+
 
 class MemoryManager:
     """Manages long-term memory for the multi-agent system using mem0."""
@@ -117,11 +120,20 @@ class MemoryManager:
 
 
 # Singleton instance
-_memory_manager_instance = None
+from typing import Dict
+from threading import Lock
 
-def get_memory_manager(user_id: str = "default_user") -> MemoryManager:
-    """Get or create a MemoryManager instance."""
-    global _memory_manager_instance
-    if _memory_manager_instance is None:
-        _memory_manager_instance = MemoryManager(user_id)
-    return _memory_manager_instance
+_memory_manager_cache: Dict[str, "MemoryManager"] = {}
+_cache_lock = Lock()
+
+def get_memory_manager(user_id: str = "default_user") -> "MemoryManager":
+    """
+    Returns a cached MemoryManager per user_id.
+    This prevents re-initializing Chroma/mem0 every time you call get_memory_manager().
+    """
+    with _cache_lock:
+        mgr = _memory_manager_cache.get(user_id)
+        if mgr is None:
+            mgr = MemoryManager(user_id=user_id)
+            _memory_manager_cache[user_id] = mgr
+        return mgr

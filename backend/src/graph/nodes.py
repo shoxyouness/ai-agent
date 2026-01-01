@@ -19,22 +19,30 @@ from src.graph.utils import extract_all_tool_calls # Import the new helper
 # --- 1. Helper for Parallel Tool Handling (Fixes 400 Error) ---
 def _get_agent_inputs(state: MultiAgentState, history_key: str):
     """
-    Constructs inputs for an agent. 
-    Crucial: Detects if the global state has multiple ToolMessages (parallel execution) 
-    and ensures the agent sees ALL of them, not just the last one.
+    Constructs inputs for an agent.
+    Fixes duplicate ToolMessage errors by checking current history state.
     """
     history = state.get(history_key, [])
     all_messages = state.get("messages", [])
 
-    # 1. Check if the global stream ended with ToolMessages
+    # 🛑 CRITICAL FIX: 
+    # If the agent's internal history ALREADY ends with a ToolMessage (e.g. injected by Reviewer),
+    # we must NOT append anything else. The Agent has what it needs to continue.
+    if history and isinstance(history[-1], ToolMessage):
+        return history
+
+    # 1. Check if the global stream ended with ToolMessages (Parallel Execution)
     recent_tool_messages = []
     for msg in reversed(all_messages):
         if isinstance(msg, ToolMessage):
+            # Check if this specific tool message is already in history to avoid duplication
+            if history and history[-1] == msg:
+                break
             recent_tool_messages.insert(0, msg)
         else:
             break
             
-    # 2. If we found tool results, append ALL of them to history
+    # 2. If we found NEW tool results, append them
     if recent_tool_messages:
         return history + recent_tool_messages
     
@@ -44,7 +52,6 @@ def _get_agent_inputs(state: MultiAgentState, history_key: str):
         next_msg = all_messages[-1] # Fallback to last global message
         
     return history + [next_msg]
-
 
 # def _get_agent_inputs(state: MultiAgentState, history_key: str):
 #     """
@@ -232,28 +239,56 @@ async def call_reviewer_agent(state: MultiAgentState):
 
 
 async def call_memory_agent(state: MultiAgentState):
-    """Memory agent to manage long-term memory operations."""
+    """
+    Memory agent node.
+    FIXED: Now properly includes ToolMessages in the history so the agent knows it finished.
+    """
     memory_history = state.get("memory_messages", [])
     supervisor_agent_message = state.get("supervisor_response", "")
     retrieved_memory_context = state.get("retrieved_memory", "No relevant Context found.")
     user_msg = get_last_human_message(state.get("messages", []))
 
+    # --- FIX START: DETECT TOOL OUTPUTS ---
+    # Check if the global stream has a ToolMessage that isn't in our local history yet
+    all_messages = state.get("messages", [])
+    recent_tool_messages = []
+    
+    if all_messages and isinstance(all_messages[-1], ToolMessage):
+        # We found a tool output! This means we are looping back.
+        # Grab strictly the ToolMessages at the end of the chain
+        for msg in reversed(all_messages):
+            if isinstance(msg, ToolMessage):
+                recent_tool_messages.insert(0, msg)
+            else:
+                break
+    
+    # Construct the input history
+    if recent_tool_messages:
+        # If we just ran a tool, append the result to history
+        input_msgs = memory_history + recent_tool_messages
+    else:
+        # First run: Standard input
+        input_msgs = memory_history + [user_msg]
+    # --- FIX END ---
+
+    # Call the Agent
     response = await memory_agent.ainvoke(
-        messages=memory_history, 
+        messages=input_msgs, 
         retrieved_memory_context=retrieved_memory_context, 
         user_message=user_msg.content, 
         supervisor_agent_message=supervisor_agent_message
     ) 
     
-    input_msgs = memory_history + [user_msg]
+    # Update State
+    # We append the new inputs (if any) + the agent's new response
+    new_history = input_msgs + [response]
     
     return {
         "messages": [response], 
-        "memory_messages": input_msgs, 
+        "memory_messages": new_history, 
         "memory_agent_response": response.content,
         "message_to_next_agent": None,
-    } 
-
+    }
 
 async def call_browser_agent(state: MultiAgentState):
     browser_history = state.get("browser_messages", [])
