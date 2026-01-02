@@ -5,6 +5,7 @@ from .supervisor_agent import supervisor_agent
 from .memory_agent import memory_agent
 from .review_agent import reviewer_agent
 from .browser_agent import run_browser_task
+from .search_agent import deep_research_agent
 __all__ = [
     "calendar_agent",
     "email_agent",
@@ -13,4 +14,5 @@ __all__ = [
     "memory_agent",
     "reviewer_agent",
     "run_browser_task",
+    "deep_research_agent"
 ]

@@ -36,3 +36,6 @@ class MultiAgentState(TypedDict):
     reviewed_tool_args: Optional[Dict[str, Any]]       # if you later support "edit"
 
     bulk_approval_active: bool  
+
+    research_messages: Annotated[List[BaseMessage], add_messages]
+    research_agent_response: str

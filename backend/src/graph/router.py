@@ -1,6 +1,6 @@
 from src.graph.state import MultiAgentState
 from src.graph.consts import *
-from src.agents import email_agent, calendar_agent, sheet_agent, memory_agent
+from src.agents import email_agent, calendar_agent, sheet_agent, memory_agent, deep_research_agent
 from langchain_core.messages import ToolMessage
 from langgraph.graph import END
 
@@ -16,6 +16,7 @@ CAL_TOOLS = {t.name.lower() for t in calendar_agent.tools}
 SHEET_TOOLS = {t.name.lower() for t in sheet_agent.tools}
 MEMORY_TOOLS = {t.name.lower() for t in memory_agent.tools}
 
+RESEARCH_TOOLS = {t.name.lower() for t in deep_research_agent.tools}
 
 def sub_agent_should_continue(state: MultiAgentState) -> str:
     tool_name = _get_last_tool_name(state.get("messages"))
@@ -31,6 +32,9 @@ def sub_agent_should_continue(state: MultiAgentState) -> str:
         return CALENDAR_TOOL_NODE
     if tool_name in SHEET_TOOLS:
         return SHEET_TOOL_NODE
+    if tool_name in RESEARCH_TOOLS:
+        return DEEP_RESEARCH_TOOL_NODE
+
 
     return CLEAR_STATE_NODE
 
@@ -50,6 +54,8 @@ def supervisor_should_continue(state: MultiAgentState) -> str:
         return SHEET_AGENT_NODE
     elif route == "browser_agent":
         return BROWSER_AGENT_NODE
+    elif route == "deep_research_agent":
+        return DEEP_RESEARCH_AGENT_NODE
         
     return "end"
 
