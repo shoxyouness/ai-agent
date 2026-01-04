@@ -8,7 +8,7 @@ from src.tools.memory_tools import search_memory
 from src.agents import (
     email_agent, calendar_agent, sheet_agent, 
     supervisor_agent, memory_agent, reviewer_agent, 
-    run_browser_task
+    run_browser_task, deep_research_agent
 )
 from src.graph.consts import SENSITIVE_EMAIL_TOOLS
 from src.graph.utils import get_last_human_message, extract_last_tool_call
@@ -352,6 +352,9 @@ def clear_sub_agents_state(state: MultiAgentState):
     if state.get("browser_agent_response"):
         summary_parts.append(f"Browser Agent: {state['browser_agent_response']}")
 
+    if state.get("research_agent_response"):
+        summary_parts.append(f"Deep Research Agent Findings: {state['research_agent_response']}")
+
     # Create the detailed summary message
     if summary_parts:
         content = "\n".join(summary_parts)
@@ -382,3 +385,17 @@ def clear_sub_agents_state(state: MultiAgentState):
         "message_to_next_agent": None,
         "bulk_approval_active": False 
     }
+
+
+async def call_deep_research_agent(state: MultiAgentState):
+    """
+    Handler for the Deep Research Agent.
+    Uses the generic agent wrapper to handle the ReAct loop (Agent -> Tool -> Agent).
+    """
+    print("🔎 Deep Research Agent is working...")
+    return await call_agent_generic(
+        state, 
+        deep_research_agent, 
+        "research_messages", 
+        "research_agent_response"
+    )

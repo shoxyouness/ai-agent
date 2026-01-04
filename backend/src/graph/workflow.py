@@ -24,6 +24,9 @@ def build_graph():
     graph.add_node(REVIEWER_NODE, call_reviewer_agent)
     graph.add_node(CLEAR_STATE_NODE, clear_sub_agents_state)
 
+    graph.add_node(DEEP_RESEARCH_AGENT_NODE, call_deep_research_agent)
+    graph.add_node(DEEP_RESEARCH_TOOL_NODE, ToolNode(deep_research_agent.tools))
+
     # 3. Add Tool Nodes
     graph.add_node(EMAIL_TOOL_NODE, ToolNode(email_agent.tools))
     graph.add_node(CALENDAR_TOOL_NODE, ToolNode(calendar_agent.tools))
@@ -43,6 +46,7 @@ def build_graph():
             CALENDAR_AGENT_NODE: CALENDAR_AGENT_NODE,
             SHEET_AGENT_NODE: SHEET_AGENT_NODE,
             BROWSER_AGENT_NODE: BROWSER_AGENT_NODE,
+            DEEP_RESEARCH_AGENT_NODE: DEEP_RESEARCH_AGENT_NODE, 
             "end": MEMORY_AGENT_NODE
         }
     )
@@ -92,5 +96,18 @@ def build_graph():
     graph.add_edge(SHEET_TOOL_NODE, SHEET_AGENT_NODE)
 
     graph.add_edge(MEMORY_TOOL_NODE, MEMORY_AGENT_NODE)
+    
+    graph.add_conditional_edges(
+        DEEP_RESEARCH_AGENT_NODE,
+        sub_agent_should_continue, 
+        {
+            DEEP_RESEARCH_TOOL_NODE: DEEP_RESEARCH_TOOL_NODE,
+            CLEAR_STATE_NODE: CLEAR_STATE_NODE
+        }
+    )
+
+    # 4. WIRE THE TOOL NODE BACK TO THE AGENT
+    graph.add_edge(DEEP_RESEARCH_TOOL_NODE, DEEP_RESEARCH_AGENT_NODE)
+
 
     return graph.compile(checkpointer=MemorySaver())

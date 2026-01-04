@@ -17,3 +17,6 @@ MEMORY_TOOL_NODE = "memory_tool_node"
 
 # Configuration
 SENSITIVE_EMAIL_TOOLS = {"send_email", "reply_to_email"}
+
+DEEP_RESEARCH_AGENT_NODE = "deep_research_agent"
+DEEP_RESEARCH_TOOL_NODE = "deep_research_tools"
