@@ -1,23 +1,48 @@
-export const runtime = "nodejs"; // IMPORTANT for streaming stability
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const BACKEND_URL = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 
 export async function POST(req: Request) {
-  const body = await req.text(); // forward raw JSON
-  const upstream = await fetch("http://localhost:8000/chat/stream", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "text/event-stream",
-    },
-    body,
-  });
+  try {
+    const body = await req.text();
 
-  // Pass-through the stream + SSE headers
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-    },
-  });
+    const upstream = await fetch(`${BACKEND_URL}/chat/stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+      },
+      body,
+    });
+
+    if (!upstream.ok) {
+      const errText = await upstream.text();
+      return new Response(
+        JSON.stringify({ error: `Backend error ${upstream.status}: ${errText}` }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!upstream.body) {
+      return new Response(
+        JSON.stringify({ error: "No upstream body (SSE stream missing)" }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    return new Response(upstream.body, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+      },
+    });
+  } catch (e: any) {
+    return new Response(
+      JSON.stringify({ error: e?.message ?? String(e) }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
 }

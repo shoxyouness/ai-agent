@@ -10,6 +10,9 @@ import {
   ChevronUp,
   Brain,
   Wrench,
+  Mic,
+  MicOff,
+  Loader2,
 } from "lucide-react";
 
 import ReactMarkdown from "react-markdown";
@@ -23,14 +26,14 @@ type InterruptPayload = {
 };
 
 type AgentActivity = {
-  agent: string; // raw id, e.g. deep_research_agent
-  tools: string[]; // raw tool names, deduped
-  preview: string; // short response preview (markdown-safe)
+  agent: string;
+  tools: string[];
+  preview: string;
 };
 
 type MessageActivity = {
   supervisorThoughts?: string;
-  agents: AgentActivity[]; // one per agent (deduped)
+  agents: AgentActivity[];
 };
 
 type ChatMessage = {
@@ -40,8 +43,6 @@ type ChatMessage = {
   processSteps?: string[];
   detailsOpen?: boolean;
   interrupt?: InterruptPayload | null;
-
-  // NEW: structured activity (clean UI)
   activity?: MessageActivity;
 };
 
@@ -114,12 +115,8 @@ function extractThoughtsFieldIncremental(jsonSoFar: string): string | null {
   }
 }
 
-// ---------------- Pretty helpers ----------------
-
 function prettyAgentName(agent: string) {
-  return agent
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return agent.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function normalizeOneLine(s: string) {
@@ -135,29 +132,19 @@ function clampText(s: string, max = 240) {
 function toolLabel(tool: string) {
   const t = (tool ?? "").trim();
   if (!t) return "";
-  return t
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function cleanToolName(tool: string) {
   return (tool ?? "").trim();
 }
 
-// Keep preview readable: remove massive repeated headings and collapse whitespace.
-// Also hard-cap to avoid “research dumps”.
 function makeAgentPreview(raw: string) {
   if (!raw) return "";
   let t = String(raw);
-
-  // Remove super long repeated header blocks often produced by research agents
-  t = t.replace(/#{2,}\s+/g, ""); // kill markdown headings markers
-  t = t.replace(/\n{3,}/g, "\n\n");
-  t = t.trim();
-
-  // If the output is still huge, keep first ~600 chars (enough for a preview)
+  t = t.replace(/#{2,}\s+/g, "");
+  t = t.replace(/\n{3,}/g, "\n\n").trim();
   if (t.length > 900) t = t.slice(0, 900).trimEnd() + "…";
-
   return t;
 }
 
@@ -174,17 +161,13 @@ function dedupKeepOrder(arr: string[]) {
   return out;
 }
 
-// ---------------- Markdown renderer ----------------
-
 function Markdown({ text }: { text: string }) {
   return (
     <div className="prose prose-neutral dark:prose-invert max-w-none prose-a:underline prose-a:underline-offset-2 prose-pre:bg-transparent prose-pre:p-0 prose-code:bg-neutral-100 dark:prose-code:bg-neutral-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          a: ({ node, ...props }) => (
-            <a {...props} target="_blank" rel="noreferrer" />
-          ),
+          a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
           li: ({ node, ...props }) => <li {...props} className="my-1" />,
         }}
       >
@@ -193,8 +176,6 @@ function Markdown({ text }: { text: string }) {
     </div>
   );
 }
-
-// ---------------- UI components ----------------
 
 function ToolChip({ label }: { label: string }) {
   return (
@@ -214,9 +195,7 @@ function AgentCard({ name, tools, preview }: { name: string; tools: string[]; pr
           </div>
           <div className="mt-1 flex flex-wrap gap-1.5">
             {tools.length === 0 ? (
-              <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                No tools
-              </span>
+              <span className="text-[11px] text-neutral-500 dark:text-neutral-400">No tools</span>
             ) : (
               tools.map((t) => <ToolChip key={t} label={toolLabel(t)} />)
             )}
@@ -239,17 +218,19 @@ function AgentCard({ name, tools, preview }: { name: string; tools: string[]; pr
           </div>
         </div>
       ) : (
-        <div className="mt-3 text-[11px] text-neutral-500 dark:text-neutral-400">
-          No output captured.
-        </div>
+        <div className="mt-3 text-[11px] text-neutral-500 dark:text-neutral-400">No output captured.</div>
       )}
     </div>
   );
 }
 
-// -----------------------------------------------------------------------
-
 export default function NewChat() {
+  // If you ALWAYS want English transcription, set this to "en"
+  // Otherwise leave null for auto-detect.
+  const VOICE_LANGUAGE_HINT: string | null = null; // e.g. "en"
+
+  const API_BASE = "http://localhost:8000";
+
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -258,9 +239,15 @@ export default function NewChat() {
   const [processOpen, setProcessOpen] = useState(false);
   const [activeSteps, setActiveSteps] = useState<string[]>([]);
 
-  // Review UI (interrupt)
+  // Review UI
   const [reviewText, setReviewText] = useState("");
   const [reviewMode, setReviewMode] = useState<"approve" | "change" | null>(null);
+
+  // Voice UI
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<BlobPart[]>([]);
 
   // Refs
   const abortRef = useRef<AbortController | null>(null);
@@ -270,10 +257,7 @@ export default function NewChat() {
   const threadIdRef = useRef<string>(uid());
   const activeAssistantIdRef = useRef<string | null>(null);
 
-  const canSend = useMemo(
-    () => input.trim().length > 0 && !isStreaming,
-    [input, isStreaming]
-  );
+  const canSend = useMemo(() => input.trim().length > 0 && !isStreaming, [input, isStreaming]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -297,11 +281,80 @@ export default function NewChat() {
   }
 
   function toggleDetails(messageId: string) {
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === messageId ? { ...m, detailsOpen: !m.detailsOpen } : m
-      )
-    );
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, detailsOpen: !m.detailsOpen } : m)));
+  }
+
+  async function transcribeWithBackend(file: Blob) {
+    const fd = new FormData();
+    fd.append("file", file, "recording.webm");
+    if (VOICE_LANGUAGE_HINT) fd.append("language", VOICE_LANGUAGE_HINT);
+
+    const res = await fetch(`${API_BASE}/audio/transcribe`, {
+      method: "POST",
+      body: fd,
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+    return {
+      text: (data?.text as string) || "",
+      language: (data?.language as string) || null,
+    };
+  }
+
+  async function startRecording() {
+    if (isRecording || isTranscribing || isStreaming) return;
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recordedChunksRef.current = [];
+
+    const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+    const mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m)) || "";
+
+    const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    mediaRecorderRef.current = mr;
+
+    mr.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+    };
+
+    mr.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+
+      const blob = new Blob(recordedChunksRef.current, { type: mr.mimeType || "audio/webm" });
+      recordedChunksRef.current = [];
+
+      if (!blob.size) return;
+
+      try {
+        setIsTranscribing(true);
+        const { text } = await transcribeWithBackend(blob);
+
+        const trimmed = (text || "").trim();
+        if (!trimmed) return;
+
+        // ✅ IMPORTANT: this is what you were missing:
+        // send transcript as a real user message into the workflow
+        await sendTextAsNewTurn(trimmed);
+      } catch (e: any) {
+        setMessages((prev) => [
+          ...prev,
+          { id: uid(), role: "assistant", content: `⚠️ Voice transcription failed: ${String(e?.message ?? e)}` },
+        ]);
+      } finally {
+        setIsTranscribing(false);
+      }
+    };
+
+    mr.start();
+    setIsRecording(true);
+  }
+
+  function stopRecording() {
+    if (!isRecording) return;
+    setIsRecording(false);
+    mediaRecorderRef.current?.stop();
   }
 
   async function streamTurn(opts: {
@@ -314,31 +367,27 @@ export default function NewChat() {
 
     setIsStreaming(true);
 
-    // Minimal process log (sidebar)
     const processSteps: string[] = [];
 
-    // Supervisor final JSON stream
     let inFinalSupervisorWindow = false;
     let finalSupervisorJsonBuffer = "";
     let extractedResponse = "";
     let extractedThoughts = "";
 
-    // -------- Structured activity capture --------
     const supervisorThoughtsRef = { value: "" };
 
-    // per agent state
     type AgentState = {
       agent: string;
       started: boolean;
       usedTool: boolean;
       tools: Set<string>;
-      buffer: string; // token buffer
-      previewFinal: string; // finalized preview
+      buffer: string;
+      previewFinal: string;
       finalized: boolean;
     };
 
     const agentState = new Map<string, AgentState>();
-    const agentOrder: string[] = []; // order they first used a tool
+    const agentOrder: string[] = [];
     let currentAgent: string | null = null;
 
     const ensureAgent = (agent: string) => {
@@ -356,14 +405,10 @@ export default function NewChat() {
       return agentState.get(agent)!;
     };
 
-    // finalize agent preview once, when agent ends / switches / done / interrupt
     const finalizeAgentIfNeeded = (agent: string) => {
       if (!agent || agent === "supervisor") return;
       const st = ensureAgent(agent);
-
-      // Only show subagents if they used at least one tool (your requirement)
       if (!st.usedTool) return;
-
       if (!st.finalized) {
         st.previewFinal = makeAgentPreview(st.buffer);
         st.finalized = true;
@@ -372,64 +417,35 @@ export default function NewChat() {
 
     const rebuildActivity = () => {
       const agents: AgentActivity[] = [];
-
       for (const a of agentOrder) {
         const st = agentState.get(a);
-        if (!st) continue;
-        if (!st.usedTool) continue;
-
-        // If not finalized yet, show a small live preview
-        const preview = st.finalized
-          ? st.previewFinal
-          : makeAgentPreview(st.buffer);
-
-        agents.push({
-          agent: st.agent,
-          tools: Array.from(st.tools),
-          preview,
-        });
+        if (!st || !st.usedTool) continue;
+        const preview = st.finalized ? st.previewFinal : makeAgentPreview(st.buffer);
+        agents.push({ agent: st.agent, tools: Array.from(st.tools), preview });
       }
 
       setMessages((prev) =>
         prev.map((m) =>
           m.id === attachToAssistantId
-            ? {
-                ...m,
-                activity: {
-                  supervisorThoughts: supervisorThoughtsRef.value || undefined,
-                  agents,
-                },
-              }
+            ? { ...m, activity: { supervisorThoughts: supervisorThoughtsRef.value || undefined, agents } }
             : m
         )
       );
     };
 
     const setAssistantContent = (text: string) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === attachToAssistantId ? { ...m, content: text } : m
-        )
-      );
+      setMessages((prev) => prev.map((m) => (m.id === attachToAssistantId ? { ...m, content: text } : m)));
     };
 
     const setAssistantInterrupt = (interrupt: InterruptPayload | null) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === attachToAssistantId ? { ...m, interrupt } : m
-        )
-      );
+      setMessages((prev) => prev.map((m) => (m.id === attachToAssistantId ? { ...m, interrupt } : m)));
     };
 
     const setAssistantProcess = (steps: string[]) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === attachToAssistantId ? { ...m, processSteps: steps } : m
-        )
-      );
+      setMessages((prev) => prev.map((m) => (m.id === attachToAssistantId ? { ...m, processSteps: steps } : m)));
     };
 
-    // Reset assistant bubble
+    // reset assistant bubble
     setMessages((prev) =>
       prev.map((m) =>
         m.id === attachToAssistantId
@@ -462,10 +478,7 @@ export default function NewChat() {
     try {
       const res = await fetch("/api/chat/stream", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({
           message: message ?? null,
           resume_action: resume_action ?? null,
@@ -492,11 +505,9 @@ export default function NewChat() {
           const ev = rawMsg.event || "";
           const d = safeJsonParse(rawMsg.data);
 
-          // ---------------- agent_start ----------------
           if (ev === "agent_start" && d?.agent) {
             const agent = String(d.agent);
 
-            // switching agent => finalize previous agent once
             if (currentAgent && currentAgent !== agent) {
               finalizeAgentIfNeeded(currentAgent);
               rebuildActivity();
@@ -512,22 +523,17 @@ export default function NewChat() {
               setAssistantContent("");
               rebuildActivity();
             } else {
-              const st = ensureAgent(agent);
-              st.started = true;
-              // Do NOT display start in UI directly — we show a card only if tool used.
+              ensureAgent(agent).started = true;
               inFinalSupervisorWindow = false;
             }
-
             continue;
           }
 
-          // ---------------- tool_call ----------------
           if (ev === "tool_call") {
             const agent = String(d?.agent ?? "unknown");
             const tool = cleanToolName(String(d?.tool ?? ""));
             if (!tool) continue;
 
-            // finalize previous agent if tool_call arrives after agent change patterns
             if (currentAgent && currentAgent !== agent) {
               finalizeAgentIfNeeded(currentAgent);
               currentAgent = agent;
@@ -540,23 +546,18 @@ export default function NewChat() {
               const before = st.tools.size;
               st.tools.add(tool);
               st.usedTool = true;
+              if (before === 0) agentOrder.push(agent);
 
-              if (before === 0) {
-                // first tool -> define order for cards
-                agentOrder.push(agent);
-              }
               processSteps.push(`${prettyAgentName(agent)} used tool "${toolLabel(tool)}"`);
               rebuildActivity();
             }
             continue;
           }
 
-          // ---------------- token ----------------
           if (ev === "token") {
             const agent = String(d?.agent ?? "unknown");
             const t = String(d?.text ?? "");
 
-            // Supervisor final JSON
             if (agent === "supervisor" && inFinalSupervisorWindow) {
               finalSupervisorJsonBuffer += t;
 
@@ -572,36 +573,24 @@ export default function NewChat() {
                 extractedResponse = maybeResponse;
                 setAssistantContent(extractedResponse);
               }
-
               continue;
             }
 
-            // Sub-agent response capture (ONLY if they used tool)
             if (agent && agent !== "supervisor") {
               const st = ensureAgent(agent);
-
-              // Don’t store anything if no tool was used (keeps UI clean)
               if (!st.usedTool) continue;
-
-              // append buffer but cap hard (avoid dumps)
               st.buffer = (st.buffer + t).slice(-8000);
-
-              // live preview update but throttle lightly:
-              // only rebuild if buffer crosses some threshold
               if (st.buffer.length % 400 < 40) rebuildActivity();
             }
-
             continue;
           }
 
-          // ---------------- interrupt ----------------
           if (ev === "interrupt") {
             const payload: InterruptPayload = {
               type: String(d?.type ?? "review_required") as "review_required",
               payload: String(d?.payload ?? ""),
             };
 
-            // finalize current subagent
             if (currentAgent) finalizeAgentIfNeeded(currentAgent);
             rebuildActivity();
 
@@ -616,7 +605,6 @@ export default function NewChat() {
             continue;
           }
 
-          // ---------------- error ----------------
           if (ev === "error") {
             const msg = String(d?.error ?? "Unknown error");
             setAssistantContent(`⚠️ ${clampText(msg, 300)}`);
@@ -624,9 +612,7 @@ export default function NewChat() {
             continue;
           }
 
-          // ---------------- done ----------------
           if (ev === "done") {
-            // finalize current agent one last time
             if (currentAgent) finalizeAgentIfNeeded(currentAgent);
 
             if (!extractedResponse && finalSupervisorJsonBuffer) {
@@ -648,7 +634,6 @@ export default function NewChat() {
                   : m
               )
             );
-
             continue;
           }
         }
@@ -658,11 +643,7 @@ export default function NewChat() {
       if (!aborted) {
         console.warn(e);
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === attachToAssistantId
-              ? { ...m, content: "⚠️ Something went wrong while streaming." }
-              : m
-          )
+          prev.map((m) => (m.id === attachToAssistantId ? { ...m, content: "⚠️ Something went wrong while streaming." } : m))
         );
       }
     } finally {
@@ -671,11 +652,9 @@ export default function NewChat() {
     }
   }
 
-  async function sendNewQuestion() {
-    const question = input.trim();
+  async function sendTextAsNewTurn(text: string) {
+    const question = (text || "").trim();
     if (!question || isStreaming) return;
-
-    setInput("");
 
     const assistantId = uid();
     activeAssistantIdRef.current = assistantId;
@@ -696,8 +675,13 @@ export default function NewChat() {
       message: question,
       resume_action: undefined,
       attachToAssistantId: assistantId,
-      createUserBubble: true,
+      createUserBubble: true, // ✅ shows user bubble for transcript too
     });
+  }
+
+  async function sendNewQuestion() {
+    await sendTextAsNewTurn(input);
+    setInput("");
   }
 
   async function resumeFromInterrupt(actionText: string) {
@@ -738,21 +722,51 @@ export default function NewChat() {
                 type="text"
                 placeholder="Ask anything..."
                 className="w-72 md:w-96 lg:w-[700px] rounded-full p-3 border-none bg-transparent text-neutral-900 dark:text-neutral-100 focus:outline-none"
+                disabled={isStreaming}
               />
+
+              {/* MIC BUTTON */}
+              <button
+                type="button"
+                onClick={() => (isRecording ? stopRecording() : void startRecording())}
+                disabled={isStreaming || isTranscribing}
+                className={[
+                  "w-10 h-10 rounded-full flex items-center justify-center transition-colors border",
+                  isRecording
+                    ? "bg-red-600 border-red-600 text-white"
+                    : "bg-white/60 dark:bg-neutral-950/30 border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800",
+                  isStreaming || isTranscribing ? "opacity-60 cursor-not-allowed" : "",
+                ].join(" ")}
+                aria-label="Voice"
+                title={isRecording ? "Stop recording" : "Start recording"}
+              >
+                {isTranscribing ? (
+                  <Loader2 size={18} className="animate-spin" />
+                ) : isRecording ? (
+                  <MicOff size={18} />
+                ) : (
+                  <Mic size={18} />
+                )}
+              </button>
+
               <button
                 onClick={() => void sendNewQuestion()}
                 disabled={!canSend}
                 className={[
                   "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
-                  canSend
-                    ? "bg-neutral-900 hover:bg-neutral-700 cursor-pointer"
-                    : "bg-neutral-400 cursor-not-allowed",
+                  canSend ? "bg-neutral-900 hover:bg-neutral-700 cursor-pointer" : "bg-neutral-400 cursor-not-allowed",
                 ].join(" ")}
                 aria-label="Send"
               >
                 <ArrowUpFromDot size={20} className="text-white" />
               </button>
             </div>
+
+            {(isRecording || isTranscribing) && (
+              <div className="mt-3 text-xs text-neutral-600 dark:text-neutral-300">
+                {isTranscribing ? "Transcribing…" : "Recording… click mic again to stop."}
+              </div>
+            )}
           </div>
         </BackgroundLines>
       )}
@@ -797,7 +811,6 @@ export default function NewChat() {
                         </div>
                       </div>
 
-                      {/* DETAILS */}
                       {m.detailsOpen && (
                         <div className="mb-3 space-y-3">
                           <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/60 dark:bg-neutral-950/40 p-3">
@@ -823,7 +836,6 @@ export default function NewChat() {
                               </div>
                             </div>
 
-                            {/* Supervisor thoughts */}
                             {m.activity?.supervisorThoughts ? (
                               <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-950/30 p-3 mb-3">
                                 <div className="flex items-center gap-2 text-xs font-semibold text-neutral-900 dark:text-neutral-100">
@@ -836,7 +848,6 @@ export default function NewChat() {
                               </div>
                             ) : null}
 
-                            {/* Sub-agent cards */}
                             {(m.activity?.agents?.length ?? 0) === 0 ? (
                               <div className="text-xs text-neutral-500 dark:text-neutral-400">
                                 No sub-agent activity yet.
@@ -855,7 +866,6 @@ export default function NewChat() {
                             )}
                           </div>
 
-                          {/* Interrupt: Email review UI */}
                           {m.interrupt?.type === "review_required" && (
                             <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-950/40 p-3">
                               <div className="text-xs font-semibold text-neutral-800 dark:text-neutral-100 mb-2">
@@ -936,7 +946,6 @@ export default function NewChat() {
                         </div>
                       )}
 
-                      {/* Final assistant response */}
                       <div className="text-[15px] leading-6">
                         {m.content ? (
                           <Markdown text={m.content} />
@@ -969,15 +978,36 @@ export default function NewChat() {
                   disabled={isStreaming}
                 />
 
+                {/* MIC BUTTON */}
+                <button
+                  type="button"
+                  onClick={() => (isRecording ? stopRecording() : void startRecording())}
+                  disabled={isStreaming || isTranscribing}
+                  className={[
+                    "w-10 h-10 rounded-full flex items-center justify-center transition-colors border",
+                    isRecording
+                      ? "bg-red-600 border-red-600 text-white"
+                      : "bg-white/60 dark:bg-neutral-950/30 border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800",
+                    isStreaming || isTranscribing ? "opacity-60 cursor-not-allowed" : "",
+                  ].join(" ")}
+                  aria-label="Voice"
+                >
+                  {isTranscribing ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  ) : isRecording ? (
+                    <MicOff size={18} />
+                  ) : (
+                    <Mic size={18} />
+                  )}
+                </button>
+
                 {!isStreaming ? (
                   <button
                     onClick={() => void sendNewQuestion()}
                     disabled={!canSend}
                     className={[
                       "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
-                      canSend
-                        ? "bg-neutral-900 hover:bg-neutral-700 cursor-pointer"
-                        : "bg-neutral-400 cursor-not-allowed",
+                      canSend ? "bg-neutral-900 hover:bg-neutral-700 cursor-pointer" : "bg-neutral-400 cursor-not-allowed",
                     ].join(" ")}
                     aria-label="Send"
                   >
@@ -993,6 +1023,12 @@ export default function NewChat() {
                   </button>
                 )}
               </div>
+
+              {(isRecording || isTranscribing) && (
+                <div className="mt-2 text-xs text-neutral-600 dark:text-neutral-300">
+                  {isTranscribing ? "Transcribing…" : "Recording… click mic again to stop."}
+                </div>
+              )}
             </div>
           </div>
         </div>
