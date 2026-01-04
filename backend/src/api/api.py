@@ -1,31 +1,37 @@
-# src/api.py
+# backend/src/api.py
+import os
 import json
-from fastapi import FastAPI
+import tempfile
+from typing import Optional
+
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
-from typing import Optional
+from contextlib import asynccontextmanager
 
 from langchain_core.messages import HumanMessage, AIMessageChunk
 from langgraph.types import Command
 
-# Import your graph builder
 from src.graph.workflow import build_graph
-from fastapi import FastAPI
-from contextlib import asynccontextmanager
 from src.config.memory_config import get_memory_instance
+
+from openai import OpenAI
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.memory = get_memory_instance()  
+    app.state.memory = get_memory_instance()
     yield
 
 
-app = FastAPI(title="Multi-Agent Orchestrator API",lifespan=lifespan)
+app = FastAPI(title="Multi-Agent Orchestrator API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # tighten later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,15 +39,17 @@ app.add_middleware(
 
 graph = build_graph()
 
+
 class ChatRequest(BaseModel):
     message: Optional[str] = None
     thread_id: str = "default_thread"
     resume_action: Optional[str] = None
 
+
 async def stream_generator(request: ChatRequest):
     thread_id = request.thread_id
     config = {"configurable": {"thread_id": thread_id}}
-    
+
     if request.resume_action:
         print(f"🔄 Resuming thread {thread_id} with action: {request.resume_action}")
         inputs = Command(resume=request.resume_action)
@@ -49,7 +57,7 @@ async def stream_generator(request: ChatRequest):
         print(f"▶️ Starting new turn for thread {thread_id}")
         inputs = {
             "messages": [HumanMessage(content=request.message)],
-            "core_messages": [HumanMessage(content=request.message)]
+            "core_messages": [HumanMessage(content=request.message)],
         }
 
     last_agent = None
@@ -57,21 +65,25 @@ async def stream_generator(request: ChatRequest):
     try:
         async for msg, metadata in graph.astream(inputs, config, stream_mode="messages"):
             current_agent = metadata.get("langgraph_node", "unknown")
-            if current_agent == "_read": continue 
-            
+            if current_agent == "_read":
+                continue
+
             if current_agent != last_agent:
                 yield {"event": "agent_start", "data": json.dumps({"agent": current_agent})}
                 last_agent = current_agent
 
             if isinstance(msg, AIMessageChunk) and msg.content:
                 yield {"event": "token", "data": json.dumps({"agent": current_agent, "text": msg.content})}
-            
+
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
-                    yield {"event": "tool_call", "data": json.dumps({"agent": current_agent, "tool": tc["name"], "args": tc["args"]})}
+                    yield {
+                        "event": "tool_call",
+                        "data": json.dumps({"agent": current_agent, "tool": tc["name"], "args": tc["args"]}),
+                    }
 
         snapshot = graph.get_state(config)
-        
+
         if snapshot.next:
             if snapshot.tasks and snapshot.tasks[0].interrupts:
                 interrupt_value = snapshot.tasks[0].interrupts[0].value
@@ -85,9 +97,58 @@ async def stream_generator(request: ChatRequest):
         traceback.print_exc()
         yield {"event": "error", "data": json.dumps({"error": str(e)})}
 
+
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     return EventSourceResponse(stream_generator(request))
+
+
+@app.post("/audio/transcribe")
+async def audio_transcribe(
+    file: UploadFile = File(...),
+    # If you pass "en" from frontend, it forces English and prevents Arabic auto-detect mistakes.
+    language: Optional[str] = Form(None),
+):
+    """
+    multipart/form-data:
+      - file: audio blob (webm/wav/mp3)
+      - language: optional (e.g. "en", "de")
+    returns:
+      { "text": "..." }
+    """
+    if not file:
+        return {"text": ""}
+
+    content = await file.read()
+    print(f"🎙️ /audio/transcribe received: name={file.filename} type={file.content_type} bytes={len(content)}")
+
+    suffix = os.path.splitext(file.filename or "")[1] or ".webm"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp_path = tmp.name
+        tmp.write(content)
+
+    try:
+        with open(tmp_path, "rb") as f:
+            resp = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                language=language,  # IMPORTANT: pass "en" to force English
+            )
+
+        text = getattr(resp, "text", None) or ""
+        print(f"📝 Transcription length={len(text)} text={text!r}")
+        return {"text": text}
+
+    except Exception as e:
+        print(f"❌ Transcribe error: {e}")
+        return {"text": "", "error": str(e)}
+
+    finally:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
 
 @app.get("/health")
 def health():
