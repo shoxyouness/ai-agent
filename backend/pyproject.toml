@@ -1,0 +1,57 @@
+[project]
+name = "ai-personal-agent-backend"
+version = "0.1.0"
+description = "AI Personal Agent Backend"
+authors = [{name = "Younes", email = "younes@example.com"}]
+requires-python = ">=3.11"
+
+dependencies = [
+  # API / server
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "sse-starlette>=2.0",
+  "python-multipart>=0.0.9",
+
+  # config / http / parsing / cli
+  "python-dotenv>=1.0",
+  "requests>=2.31",
+  "beautifulsoup4>=4.12",
+  "rich>=13.7",
+
+  # data / time
+  "pytz>=2024.1",
+
+  # validation
+  "pydantic>=2.6",
+
+  # LangChain / LangGraph stack (keep versions aligned!)
+  "langchain>=0.3",
+  "langchain-core>=0.3",
+  "langchain-community>=0.3",
+  "langgraph>=0.2",
+  "langchain-openai>=0.2",
+  "langchain-google-genai>=1.0",
+
+  # Providers / APIs
+  "openai>=2.7,<3.0",
+  "elevenlabs>=2.0",
+  "msal>=1.28",
+
+  # Google Sheets
+  "gspread>=6.0",
+  "google-auth>=2.0",
+  "google-auth-oauthlib>=1.0",
+
+  # Tavily search tool used by langchain_community.tools.tavily_search
+  "tavily-python>=0.3",
+
+  # Memory
+  "mem0ai>=0.1.0",
+
+  # Browser automation
+  "browser-use>=0.10",
+  "playwright>=1.45",
+  "pydantic[email]",
+  "chromadb>=0.5,<1.0",
+
+]

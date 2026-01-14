@@ -1,0 +1,11 @@
+**/.git
+**/.DS_Store
+**/node_modules
+**/.next
+**/dist
+**/build
+**/.cache
+**/.venv
+**/__pycache__
+**/*.log
+**/chroma_db

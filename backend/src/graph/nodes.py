@@ -135,6 +135,8 @@ def retrieve_memory(state: MultiAgentState):
 async def call_supervisor(state: MultiAgentState):
     """Supervisor analyzes messages and decides next step."""
     messages = state.get("core_messages") 
+    print(f"DEBUG: Supervisor seeing {len(messages)} messages.")
+
     retrieved_memory_context = state.get("retrieved_memory", "No relevant Context found.")
 
     response = await supervisor_agent.ainvoke(
