@@ -1,0 +1,12 @@
+services:
+  backend:
+    build: .
+    container_name: ai_agent_backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - /app/__pycache__
+    restart: unless-stopped

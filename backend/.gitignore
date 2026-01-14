@@ -1,3 +1,5 @@
 *.env
 *refresh_token.txt
 chroma_db
+secrets/
+*.json

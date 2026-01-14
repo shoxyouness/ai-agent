@@ -54,20 +54,39 @@ load_dotenv()
 # =========================
 
 def _get_ws():
-    """Get (and initialize) the worksheet."""
-    svc_json = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON")
-    sheet_id = os.getenv("GOOGLE_SHEETS_SHEET_ID")
-    ws_title = os.getenv("GOOGLE_SHEETS_WORKSHEET_TITLE", "Contacts")
+    sheet_id = os.getenv("GOOGLE_SHEETS_SHEET_ID", "").strip()
+    ws_title = os.getenv("GOOGLE_SHEETS_WORKSHEET_TITLE", "Contacts").strip()
 
-    if not svc_json or not sheet_id:
-        raise RuntimeError("Missing GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON or GOOGLE_SHEETS_SHEET_ID.")
+    if not sheet_id:
+        raise RuntimeError("Missing GOOGLE_SHEETS_SHEET_ID.")
 
-    if svc_json.strip().startswith("{"):
-        creds_dict = json.loads(svc_json)
-        gc = gspread.service_account_from_dict(creds_dict)
-    else:
-        gc = gspread.service_account(filename=svc_json)
+    # read keys exactly as in your .env
+    private_key = (os.getenv("private_key", "") or "").strip()
+    private_key = private_key.replace("\\n", "\n")  # important
 
+    creds_dict = {
+        "type": os.getenv("type", "service_account"),
+        "project_id": os.getenv("project_id"),
+        "private_key_id": os.getenv("private_key_id"),
+        "private_key": private_key,
+        "client_email": os.getenv("client_email"),
+        "client_id": os.getenv("client_id"),
+        "auth_uri": os.getenv("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+        "token_uri": os.getenv("token_uri", "https://oauth2.googleapis.com/token"),
+        "auth_provider_x509_cert_url": os.getenv(
+            "auth_provider_x509_cert_url",
+            "https://www.googleapis.com/oauth2/v1/certs",
+        ),
+        "client_x509_cert_url": os.getenv("client_x509_cert_url", ""),
+        "universe_domain": os.getenv("universe_domain", "googleapis.com"),
+    }
+
+    required = ["project_id", "private_key_id", "private_key", "client_email", "client_id"]
+    missing = [k for k in required if not creds_dict.get(k)]
+    if missing:
+        raise RuntimeError(f"Missing Google service account env vars: {missing}")
+
+    gc = gspread.service_account_from_dict(creds_dict)
     sh = gc.open_by_key(sheet_id)
 
     try:
@@ -76,7 +95,7 @@ def _get_ws():
         ws = sh.add_worksheet(title=ws_title, rows=100, cols=max(20, len(COLUMNS)))
         ws.append_row(COLUMNS)
 
-    # Ensure header row exists and in correct order
+    # header fix
     header = ws.row_values(1)
     if [h.strip().lower() for h in header] != COLUMNS:
         if not header:
@@ -86,7 +105,6 @@ def _get_ws():
             ws.update(f"A1:{gspread.utils.rowcol_to_a1(1, len(COLUMNS))}", [COLUMNS])
 
     return ws
-
 
 def _normalize_email(s: Optional[str]) -> Optional[str]:
     if not s:

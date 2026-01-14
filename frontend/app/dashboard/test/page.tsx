@@ -229,7 +229,7 @@ export default function NewChat() {
   // Otherwise leave null for auto-detect.
   const VOICE_LANGUAGE_HINT: string | null = null; // e.g. "en"
 
-  const API_BASE = "http://localhost:8000";
+  const API_BASE = "http://backend:8000";
 
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);

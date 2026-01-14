@@ -5,7 +5,6 @@ from langchain_core.messages import BaseMessage
 class MultiAgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
 
-    # Cleaned conversation that the supervisor + memory agent use:
     core_messages: List[BaseMessage]
 
     route: str  
@@ -30,10 +29,10 @@ class MultiAgentState(TypedDict):
     sheet_agent_response: str
     memory_agent_response: str
 
-    pending_email_tool_call: Optional[Dict[str, Any]]  # {"name": str, "args": dict, "id": str}
-    review_decision: Optional[str]                     # "approved" | "change_requested"
+    pending_email_tool_call: Optional[Dict[str, Any]]  
+    review_decision: Optional[str]                     
     review_feedback: Optional[str]
-    reviewed_tool_args: Optional[Dict[str, Any]]       # if you later support "edit"
+    reviewed_tool_args: Optional[Dict[str, Any]]      
 
     bulk_approval_active: bool  
 
