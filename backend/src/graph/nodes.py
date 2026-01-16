@@ -15,6 +15,7 @@ from src.graph.utils import get_last_human_message, extract_last_tool_call
 
 
 from src.graph.utils import extract_all_tool_calls # Import the new helper
+from src.graph.utils import filter_supervisor_history # Import the new helper
 
 # --- 1. Helper for Parallel Tool Handling (Fixes 400 Error) ---
 def _get_agent_inputs(state: MultiAgentState, history_key: str):
@@ -134,8 +135,9 @@ def retrieve_memory(state: MultiAgentState):
 
 async def call_supervisor(state: MultiAgentState):
     """Supervisor analyzes messages and decides next step."""
-    messages = state.get("core_messages") 
-    print(f"DEBUG: Supervisor seeing {len(messages)} messages.")
+    # Use filtered history: Human, Supervisor, and Summary messages only
+    messages = filter_supervisor_history(state.get("messages", []))
+    print(f"DEBUG: Supervisor seeing {len(messages)} filtered messages.")
 
     retrieved_memory_context = state.get("retrieved_memory", "No relevant Context found.")
 

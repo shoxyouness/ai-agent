@@ -55,3 +55,34 @@ def strip_tool_calls(history):
             continue
         cleaned.append(m)
     return cleaned
+
+def filter_supervisor_history(messages: list, limit: int = 20) -> list:
+    """
+    Filters history for the Supervisor to reduce noise.
+    Keeps:
+    - HumanMessages
+    - AIMessages from 'Supervisor'
+    - AIMessages from 'sub_agent_task_summary' (critical state updates)
+    
+    Removes:
+    - ToolMessages
+    - AIMessages from other agents (e.g. 'email_agent') unless it's a summary
+    """
+    filtered = []
+    # Traverse backwards to get the most recent relevant messages first
+    for msg in reversed(messages):
+        # 1. Keep Human Messages
+        if isinstance(msg, HumanMessage):
+            filtered.insert(0, msg)
+        
+        # 2. Keep AI Messages (Strictly Supervisor or Summary)
+        elif isinstance(msg, AIMessage):
+            name = (getattr(msg, "name", "") or "").lower()
+            if name in ("supervisor", "sub_agent_task_summary"):
+                filtered.insert(0, msg)
+        
+        # Stop if we hit the limit
+        if len(filtered) >= limit:
+            break
+            
+    return filtered

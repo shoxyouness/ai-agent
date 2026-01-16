@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { SignOutButton, UserButton, useUser } from "@clerk/nextjs";
 import { LayoutDashboard, MessageCircle } from "lucide-react";
+import Image from "next/image";
 
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const links = [
@@ -96,17 +97,26 @@ function Logo() {
       href="/"
       className="relative z-20 flex items-center space-x-2 py-1 text-sm font-normal text-black"
     >
-      <div className="h-5 w-6 shrink-0 rounded-tl-lg rounded-tr-sm rounded-br-lg rounded-bl-sm bg-black dark:bg-white" />
+      <Image
+        src="/logo.png"
+        alt="Logo"
+        width={32}
+        height={32}
+        className="object-contain"
+        priority
+      />
+
       <motion.span
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         className="font-medium whitespace-pre text-black dark:text-white"
       >
-        Launchly
+        Launchlys
       </motion.span>
     </Link>
   );
 }
+
 
 function LogoIcon() {
   return (
