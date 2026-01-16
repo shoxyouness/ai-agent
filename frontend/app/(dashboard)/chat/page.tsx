@@ -17,6 +17,7 @@ import {
   Home,
   Settings,
   LogOut,
+  PlusCircle,
 } from "lucide-react";
 import { IconUserBolt } from "@tabler/icons-react";
 import { useUser, SignOutButton } from "@clerk/nextjs";
@@ -357,6 +358,24 @@ export default function NewChat() {
     }
     fetchHistory();
   }, [isLoaded, user]);
+
+  async function handleNewChat() {
+    if (!user) return;
+    try {
+      const res = await fetch("/api/chat/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thread_id: user.id }),
+      });
+      if (res.ok) {
+        setMessages([]);
+        setInput("");
+        // Reset any other relevant state if needed
+      }
+    } catch (e) {
+      console.error("Failed to clear history", e);
+    }
+  }
 
   function stop() {
     abortRef.current?.abort();
@@ -830,6 +849,17 @@ export default function NewChat() {
               <Settings size={18} />
               Settings
             </Link>
+
+            <button
+              onClick={() => {
+                void handleNewChat();
+                setMenuOpen(false);
+              }}
+              className="flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors w-full text-left"
+            >
+              <PlusCircle size={18} />
+              New Chat
+            </button>
 
             <div className="h-px bg-neutral-200 dark:bg-neutral-800 mx-2 my-1" />
 

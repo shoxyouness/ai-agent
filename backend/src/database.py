@@ -70,3 +70,16 @@ def get_messages(thread_id: str, limit: int = 20) -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"❌ Error getting messages from DB: {e}")
         return []
+def clear_messages(thread_id: str):
+    """Delete all messages for a thread."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
+        
+        conn.commit()
+        conn.close()
+        print(f"🗑️ Cleared messages for thread: {thread_id}")
+    except Exception as e:
+        print(f"❌ Error clearing messages in DB: {e}")

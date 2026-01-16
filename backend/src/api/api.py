@@ -16,7 +16,7 @@ from langgraph.types import Command
 from src.graph.workflow import build_graph
 from src.graph.workflow import build_graph
 from src.config.memory_config import get_memory_instance
-from src.database import create_db_and_tables, add_message, get_messages
+from src.database import create_db_and_tables, add_message, get_messages, clear_messages
 
 from openai import OpenAI
 
@@ -152,6 +152,12 @@ async def chat_stream(request: ChatRequest):
 @app.get("/chat/history")
 def get_chat_history(thread_id: str = "default_thread"):
     return get_messages(thread_id, limit=20)
+
+
+@app.post("/chat/clear")
+def clear_chat_history(request: ChatRequest):
+    clear_messages(request.thread_id)
+    return {"status": "success", "message": "History cleared"}
 
 
 @app.post("/audio/transcribe")
