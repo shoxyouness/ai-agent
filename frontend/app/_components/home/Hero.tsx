@@ -1,5 +1,6 @@
+"use client";
 import React from "react";
-import Spline from "@splinetool/react-spline/next";
+import Spline from "@splinetool/react-spline";
 import { PointerHighlight } from "@/components/ui/pointer-highlight";
 import { FlipWords } from "@/components/ui/flip-words";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
@@ -11,7 +12,12 @@ import Link from "next/link";
 import HomeNavbar from "./Nav";
 
 const HomeHero = () => {
+  const [mounted, setMounted] = React.useState(false);
   const words = ["emails", "meetings", "searchs", "workflows"];
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
 
   return (
     <div className="fixed w-screen h-screen">
@@ -64,7 +70,7 @@ const HomeHero = () => {
           </div>
 
           <div className="flex items-center justify-start gap-6">
-            <Link href="/docs">
+            <Link href="https://github.com/shoxyouness/ai-agent">
               <div className=" flex  items-center justify-start">
                 <div
                   className={cn(
@@ -78,7 +84,7 @@ const HomeHero = () => {
               </div>
             </Link>
 
-            <Link href="/dashboard/chat" className="flex justify-center">
+            <Link href="/chat" className="flex justify-center">
               <NoiseBackground
                 containerClassName="w-fit p-2 rounded-full mx-auto"
                 gradientColors={[
@@ -96,7 +102,12 @@ const HomeHero = () => {
         </div>
       </div>
       <div className="w-full h-[110vh]">
-        <Spline scene="https://prod.spline.design/NNMwqWnw6qzKOHwR/scene.splinecode" />{" "}
+        {mounted && (
+          <Spline
+            scene="https://prod.spline.design/NNMwqWnw6qzKOHwR/scene.splinecode"
+            onError={(e) => console.error("Spline Error:", e)}
+          />
+        )}
       </div>
     </div>
   );
