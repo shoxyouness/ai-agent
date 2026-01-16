@@ -11,11 +11,13 @@ from src.agents import (
     run_browser_task, deep_research_agent
 )
 from src.graph.consts import SENSITIVE_EMAIL_TOOLS
-from src.graph.utils import get_last_human_message, extract_last_tool_call
-
-
-from src.graph.utils import extract_all_tool_calls # Import the new helper
-from src.graph.utils import filter_supervisor_history # Import the new helper
+from src.graph.utils import (
+    get_last_human_message, 
+    extract_last_tool_call, 
+    extract_all_tool_calls, 
+    strip_tool_calls, 
+    filter_supervisor_history
+)
 
 # --- 1. Helper for Parallel Tool Handling (Fixes 400 Error) ---
 def _get_agent_inputs(state: MultiAgentState, history_key: str):
@@ -45,14 +47,14 @@ def _get_agent_inputs(state: MultiAgentState, history_key: str):
             
     # 2. If we found NEW tool results, append them
     if recent_tool_messages:
-        return history + recent_tool_messages
+        return strip_tool_calls(history + recent_tool_messages)
     
     # 3. Otherwise, it's a standard message (User or Supervisor)
     next_msg = state.get("message_to_next_agent")
     if not next_msg:
         next_msg = all_messages[-1] # Fallback to last global message
         
-    return history + [next_msg]
+    return strip_tool_calls(history + [next_msg])
 
 # def _get_agent_inputs(state: MultiAgentState, history_key: str):
 #     """
@@ -208,14 +210,16 @@ async def call_reviewer_agent(state: MultiAgentState):
     human_text = interrupt(draft)
 
     # 3. Reviewer Agent Logic
-    review = await reviewer_agent.ainvoke([
+    review_history = [
         AIMessage(content=draft, name="reviewer_agent"),
-        HumanMessage(content=str(human_text)),
-    ])
+        HumanMessage(content=str(human_text), name="review_human"),
+    ]
+    review = await reviewer_agent.ainvoke(review_history)
     
     updates = {
         "review_decision": review.decision,
         "review_feedback": review.feedback,
+        "messages": [HumanMessage(content=str(human_text), name="review_human")],
         "core_messages": state["core_messages"] + [
             AIMessage(content=f"[REVIEW] {review.decision}\n{review.feedback}", name="reviewer_agent")
         ],
@@ -359,20 +363,29 @@ def clear_sub_agents_state(state: MultiAgentState):
     if state.get("research_agent_response"):
         summary_parts.append(f"Deep Research Agent Findings: {state['research_agent_response']}")
 
+    # Help identify the instruction that was just completed
+    last_inst = state.get("message_to_next_agent")
+    inst_text = last_inst.content if last_inst and hasattr(last_inst, 'content') else "Current user request"
+    
+    # Add a timestamp to distinguish reports chronologically
+    import datetime
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+
     # Create the detailed summary message
     if summary_parts:
         content = "\n".join(summary_parts)
         
         # AGGRESSIVE SYSTEM INSTRUCTION TO STOP LOOPS
         final_summary = (
-            "### SUBSYSTEM REPORT ###\n"
-            f"{content}\n"
+            f"### SUBSYSTEM REPORT ({ts}) ###\n"
+            f"**Instruction Addressed:** {inst_text}\n"
+            f"**Details:**\n{content}\n"
             "------------------------\n"
             "⚠️ SYSTEM INSTRUCTION TO SUPERVISOR:\n"
-            "1. Analyze the 'ACTION COMPLETED' lines above.\n"
-            "2. If an action (like canceling meetings or sending email) is marked ✅, IT IS DONE.\n"
-            "3. DO NOT route back to the agent to do it again.\n"
-            "4. Proceed to the next step or finish."
+            "1. The instruction listed above is now 100% COMPLETE.\n"
+            "2. ANY human feedback or change requests seen earlier in the history HAVE BEEN FULLY INCORPORATED into this result.\n"
+            "3. If an action is marked ✅, IT IS DONE. DO NOT route back to the agent for this specific instruction again.\n"
+            "4. Proceed to the next objective or provide the final response."
         )
         
         summary_message = AIMessage(
@@ -382,11 +395,20 @@ def clear_sub_agents_state(state: MultiAgentState):
         core.append(summary_message)
 
     return {
+        "messages": [summary_message] if summary_parts else [],
         "core_messages": core,
         "email_messages": [],
         "calendar_messages": [],
         "sheet_messages": [],
+        "email_agent_response": None,
+        "calendar_agent_response": None,
+        "sheet_agent_response": None,
+        "browser_agent_response": None,
+        "research_agent_response": None,
         "message_to_next_agent": None,
+        "review_decision": None,
+        "review_feedback": None,
+        "pending_email_tool_call": None,
         "bulk_approval_active": False 
     }
 

@@ -14,7 +14,9 @@ from langchain_core.messages import HumanMessage, AIMessageChunk
 from langgraph.types import Command
 
 from src.graph.workflow import build_graph
+from src.graph.workflow import build_graph
 from src.config.memory_config import get_memory_instance
+from src.database import create_db_and_tables, add_message, get_messages
 
 from openai import OpenAI
 
@@ -23,6 +25,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    create_db_and_tables()
     app.state.memory = get_memory_instance()
     yield
 
@@ -59,20 +62,47 @@ async def stream_generator(request: ChatRequest):
             "messages": [HumanMessage(content=request.message)],
             "core_messages": [HumanMessage(content=request.message)],
         }
+        # Save User Message
+        if request.message:
+            add_message(thread_id, "user", request.message)
 
     last_agent = None
+    full_response = ""
 
     try:
+        config["recursion_limit"] = 40
         async for msg, metadata in graph.astream(inputs, config, stream_mode="messages"):
             current_agent = metadata.get("langgraph_node", "unknown")
             if current_agent == "_read":
                 continue
 
             if current_agent != last_agent:
+                # Save previous agent's response if it was public
+                PUBLIC_AGENTS = ("supervisor", "email_agent", "calendar_agent", "sheet_agent", "browser_agent", "deep_research_agent")
+                if last_agent in PUBLIC_AGENTS and full_response.strip():
+                     # 🛑 CRITICAL: Parse Supervisor JSON to save only the response
+                     content_to_save = full_response
+                     if last_agent == "supervisor":
+                         try:
+                             # Find JSON boundaries
+                             start = full_response.find("{")
+                             end = full_response.rfind("}")
+                             if start != -1 and end != -1:
+                                 json_str = full_response[start:end+1]
+                                 parsed = json.loads(json_str)
+                                 if "response" in parsed:
+                                     content_to_save = parsed["response"]
+                         except:
+                             pass
+                     
+                     add_message(thread_id, "assistant", content_to_save)
+                
+                full_response = "" # Reset buffer for the new agent
                 yield {"event": "agent_start", "data": json.dumps({"agent": current_agent})}
                 last_agent = current_agent
 
             if isinstance(msg, AIMessageChunk) and msg.content:
+                full_response += msg.content
                 yield {"event": "token", "data": json.dumps({"agent": current_agent, "text": msg.content})}
 
             if hasattr(msg, "tool_calls") and msg.tool_calls:
@@ -89,6 +119,22 @@ async def stream_generator(request: ChatRequest):
                 interrupt_value = snapshot.tasks[0].interrupts[0].value
                 yield {"event": "interrupt", "data": json.dumps({"type": "review_required", "payload": str(interrupt_value)})}
         else:
+            # Save the VERY LAST agent's response if it was public
+            PUBLIC_AGENTS = ("supervisor", "email_agent", "calendar_agent", "sheet_agent", "browser_agent", "deep_research_agent")
+            if last_agent in PUBLIC_AGENTS and full_response.strip():
+                content_to_save = full_response
+                if last_agent == "supervisor":
+                    try:
+                        start = full_response.find("{")
+                        end = full_response.rfind("}")
+                        if start != -1 and end != -1:
+                            json_str = full_response[start:end+1]
+                            parsed = json.loads(json_str)
+                            if "response" in parsed:
+                                content_to_save = parsed["response"]
+                    except:
+                        pass
+                add_message(thread_id, "assistant", content_to_save)
             yield {"event": "done", "data": "success"}
 
     except Exception as e:
@@ -101,6 +147,11 @@ async def stream_generator(request: ChatRequest):
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     return EventSourceResponse(stream_generator(request))
+
+
+@app.get("/chat/history")
+def get_chat_history(thread_id: str = "default_thread"):
+    return get_messages(thread_id, limit=20)
 
 
 @app.post("/audio/transcribe")
