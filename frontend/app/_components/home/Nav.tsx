@@ -16,13 +16,22 @@ import {
   SignUpButton,
   UserButton,
 } from "@clerk/nextjs";
+import Image from "next/image";
 
 const HomeNavbar = ({ className }: { className?: string }) => {
   const [active, setActive] = useState<string | null>(null);
 
   return (
     <div className="fixed top-2 px-8 inset-x-0  mx-auto z-50 flex items-center justify-between ">
-      <div>Logo</div>
+      <div>
+        <Image
+          src="/logo.png"
+          alt="Logo"
+          width={100}
+          height={100}
+          className="object-contain"
+        />
+      </div>
       <div className={cn("text-neutral-600", className)}>
         <Menu setActive={setActive}>
           <MenuItem setActive={setActive} active={active} item="Services">
@@ -90,8 +99,8 @@ const HomeNavbar = ({ className }: { className?: string }) => {
           </SignUpButton>
         </SignedOut>
         <SignedIn>
-              <UserButton />
-            </SignedIn>
+          <UserButton />
+        </SignedIn>
       </div>
 
       {/* <header className="flex justify-end items-center p-4 gap-4 h-16">
