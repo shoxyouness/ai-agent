@@ -1,11 +1,16 @@
 # backend/src/api.py
 import os
+from dotenv import load_dotenv
+
+load_dotenv() # Load environment variables early
+
 import json
 import tempfile
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -17,6 +22,7 @@ from src.graph.workflow import build_graph
 from src.graph.workflow import build_graph
 from src.config.memory_config import get_memory_instance
 from src.database import create_db_and_tables, add_message, get_messages, clear_messages
+from src.utils.audio_utils import tts_to_file
 
 from openai import OpenAI
 
@@ -47,6 +53,10 @@ class ChatRequest(BaseModel):
     message: Optional[str] = None
     thread_id: str = "default_thread"
     resume_action: Optional[str] = None
+
+
+class TTSRequest(BaseModel):
+    text: str
 
 
 async def stream_generator(request: ChatRequest):
@@ -205,6 +215,42 @@ async def audio_transcribe(
             os.remove(tmp_path)
         except Exception:
             pass
+
+
+@app.post("/audio/tts")
+async def audio_tts(request: TTSRequest):
+    """
+    Synthesize text to speech and return the MP3 file.
+    """
+    text = request.text
+    if not text:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="No text provided")
+
+    try:
+        # Generate a unique filename for the response
+        import uuid
+        # Ensure we use an absolute path or at least a safe one
+        # Use the same directory as defined in audio_utils if possible
+        from src.utils.audio_utils import AUDIO_OUTPUT_PATH
+        out_dir = os.path.dirname(os.path.abspath(AUDIO_OUTPUT_PATH))
+        out_path = os.path.join(out_dir, f"response_{uuid.uuid4().hex}.mp3")
+        
+        generated_path = tts_to_file(text, out_path=out_path)
+        
+        if not os.path.exists(generated_path):
+             from fastapi import HTTPException
+             raise HTTPException(status_code=500, detail="Audio file generation failed")
+
+        return FileResponse(
+            generated_path, 
+            media_type="audio/mpeg", 
+            filename="response.mp3"
+        )
+    except Exception as e:
+        print(f"❌ TTS error: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/health")

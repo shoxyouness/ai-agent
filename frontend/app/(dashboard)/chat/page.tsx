@@ -17,7 +17,11 @@ import {
   Home,
   Settings,
   LogOut,
-  PlusCircle,
+  Trash,
+  Volume2,
+  VolumeX,
+  Play,
+  Pause,
 } from "lucide-react";
 import { IconUserBolt } from "@tabler/icons-react";
 import { useUser, SignOutButton } from "@clerk/nextjs";
@@ -52,6 +56,9 @@ type ChatMessage = {
   detailsOpen?: boolean;
   interrupt?: InterruptPayload | null;
   activity?: MessageActivity;
+  audioUrl?: string;
+  isAudioLoading?: boolean;
+  autoPlay?: boolean;
 };
 
 function uid() {
@@ -246,6 +253,73 @@ function AgentCard({ name, tools, preview }: { name: string; tools: string[]; pr
   );
 }
 
+function VoiceMessage({ url, autoPlay = false }: { url: string; autoPlay?: boolean }) {
+  const [isPlaying, setIsPlaying] = useState(autoPlay);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    if (autoPlay && audioRef.current) {
+      audioRef.current.play().catch((e) => console.error("Auto-play failed:", e));
+    }
+  }, [autoPlay]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const updateProgress = () => {
+      setProgress((audio.currentTime / audio.duration) * 100);
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setProgress(0);
+    };
+
+    audio.addEventListener("timeupdate", updateProgress);
+    audio.addEventListener("ended", handleEnded);
+    return () => {
+      audio.removeEventListener("timeupdate", updateProgress);
+      audio.removeEventListener("ended", handleEnded);
+    };
+  }, []);
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  return (
+    <div className="flex items-center gap-4 bg-neutral-100 dark:bg-neutral-800/50 p-4 rounded-2xl border border-neutral-200 dark:border-neutral-700/50 w-full max-w-sm group">
+      <audio ref={audioRef} src={url} className="hidden" />
+      <button
+        onClick={togglePlay}
+        className="w-10 h-10 rounded-full bg-neutral-900 dark:bg-neutral-100 flex items-center justify-center text-white dark:text-neutral-900 transition-transform hover:scale-105 active:scale-95"
+      >
+        {isPlaying ? <Pause size={20} /> : <Play size={20} className="ml-0.5" />}
+      </button>
+      <div className="flex-1 space-y-2">
+        <div className="h-1.5 w-full bg-neutral-200 dark:bg-neutral-700 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-neutral-900 dark:bg-neutral-100 transition-all duration-100"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[10px] text-neutral-500 font-medium">
+          <span>{isPlaying ? "Playing..." : "Voice Message"}</span>
+          <span>ElevenLabs</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function NewChat() {
   // If you ALWAYS want English transcription, set this to "en"
   // Otherwise leave null for auto-detect.
@@ -262,8 +336,8 @@ export default function NewChat() {
   const [activeSteps, setActiveSteps] = useState<string[]>([]);
 
   // Review UI
-  const [reviewText, setReviewText] = useState("");
   const [reviewMode, setReviewMode] = useState<"approve" | "change" | null>(null);
+  const [audioResponseEnabled, setAudioResponseEnabled] = useState(false);
 
   // Voice UI
   const [isRecording, setIsRecording] = useState(false);
@@ -411,6 +485,24 @@ export default function NewChat() {
       text: (data?.text as string) || "",
       language: (data?.language as string) || null,
     };
+  }
+
+  async function playAudioResponse(text: string) {
+    if (!text || text.length < 2) return;
+    try {
+      const res = await fetch("/api/audio/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      return url;
+    } catch (e) {
+      console.error("Failed to fetch audio response", e);
+      return null;
+    }
   }
 
   async function startRecording() {
@@ -744,6 +836,22 @@ export default function NewChat() {
                   : m
               )
             );
+
+            if (audioResponseEnabled && extractedResponse) {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === attachToAssistantId ? { ...m, isAudioLoading: true } : m))
+              );
+
+              playAudioResponse(extractedResponse).then((url) => {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === attachToAssistantId
+                      ? { ...m, audioUrl: url ?? undefined, isAudioLoading: false, autoPlay: !!url }
+                      : m
+                  )
+                );
+              });
+            }
             continue;
           }
         }
@@ -777,6 +885,7 @@ export default function NewChat() {
       detailsOpen: true,
       interrupt: null,
       activity: { agents: [] },
+      isAudioLoading: audioResponseEnabled,
     };
 
     setMessages((prev) => [...prev, assistantMsg]);
@@ -857,8 +966,8 @@ export default function NewChat() {
               }}
               className="flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors w-full text-left"
             >
-              <PlusCircle size={18} />
-              New Chat
+              <Trash size={18} />
+              Clear Chat
             </button>
 
             <div className="h-px bg-neutral-200 dark:bg-neutral-800 mx-2 my-1" />
@@ -924,6 +1033,17 @@ export default function NewChat() {
                 ) : (
                   <Mic size={18} />
                 )}
+              </button>
+
+              <button
+                onClick={() => setAudioResponseEnabled(!audioResponseEnabled)}
+                title={audioResponseEnabled ? "Disable Audio Response" : "Enable Audio Response"}
+                className={`p-2 rounded-xl transition-all duration-300 ${audioResponseEnabled
+                  ? "bg-blue-500/20 text-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.3)]"
+                  : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+                  }`}
+              >
+                {audioResponseEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
               </button>
 
               <button
@@ -1132,7 +1252,19 @@ export default function NewChat() {
                         )}
 
                         <div className="text-[15px] leading-6">
-                          {m.content ? (
+                          {m.audioUrl ? (
+                            <VoiceMessage url={m.audioUrl} autoPlay={m.autoPlay} />
+                          ) : (m.isAudioLoading || (isStreaming && audioResponseEnabled && m.id === activeAssistantIdRef.current)) ? (
+                            <div className="flex items-center gap-3 bg-neutral-100 dark:bg-neutral-800/50 p-4 rounded-2xl border border-neutral-200 dark:border-neutral-700/50 w-full max-w-sm">
+                              <div className="w-10 h-10 rounded-full bg-neutral-200 dark:bg-neutral-700 animate-pulse" />
+                              <div className="flex-1 space-y-2">
+                                <div className="h-1.5 w-full bg-neutral-200 dark:bg-neutral-700 rounded-full overflow-hidden" />
+                                <div className="text-[10px] text-neutral-500 animate-pulse">
+                                  {isStreaming ? "Thinking..." : "Generating voice..."}
+                                </div>
+                              </div>
+                            </div>
+                          ) : m.content ? (
                             <Markdown text={m.content} />
                           ) : isStreaming ? (
                             <span className="text-sm text-neutral-500 dark:text-neutral-400" />
@@ -1140,6 +1272,24 @@ export default function NewChat() {
                             <span className="text-sm text-neutral-500 dark:text-neutral-400">—</span>
                           )}
                         </div>
+
+                        {m.audioUrl && m.content && (
+                          <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-800">
+                            <button
+                              onClick={() => {
+                                setMessages(prev => prev.map(msg => msg.id === m.id ? { ...msg, detailsOpen: !msg.detailsOpen } : msg))
+                              }}
+                              className="text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors flex items-center gap-1"
+                            >
+                              Show Transcript {m.detailsOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                            </button>
+                            {m.detailsOpen && (
+                              <div className="mt-2 text-sm opacity-60">
+                                <Markdown text={m.content} />
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1186,6 +1336,18 @@ export default function NewChat() {
                         ) : (
                           <Mic size={20} />
                         )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setAudioResponseEnabled(!audioResponseEnabled)}
+                        title={audioResponseEnabled ? "Disable Audio Response" : "Enable Audio Response"}
+                        className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-300 border ${audioResponseEnabled
+                          ? "bg-blue-500/20 border-blue-400 text-blue-500 shadow-lg shadow-blue-500/20"
+                          : "bg-neutral-100 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+                          }`}
+                      >
+                        {audioResponseEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
                       </button>
 
                       {!isStreaming ? (
