@@ -337,6 +337,7 @@ export default function NewChat() {
 
   // Review UI
   const [reviewMode, setReviewMode] = useState<"approve" | "change" | null>(null);
+  const [reviewText, setReviewText] = useState("");
   const [audioResponseEnabled, setAudioResponseEnabled] = useState(false);
 
   // Voice UI
@@ -424,7 +425,38 @@ export default function NewChat() {
               activity: activity
             };
           });
-          setMessages(mapped);
+
+          // Group consecutive assistant messages
+          const grouped: ChatMessage[] = [];
+          for (const msg of mapped) {
+            const last = grouped[grouped.length - 1];
+            if (last && last.role === "assistant" && msg.role === "assistant") {
+              // Merge into the previous assistant message
+              if (!last.activity) last.activity = { agents: [] };
+
+              // Add the previous content as a sub-step if it was an intermediate thought/action
+              if (last.content && last.content !== "—") {
+                last.activity.agents.push({
+                  agent: "Process Step",
+                  tools: [],
+                  preview: last.content
+                });
+              }
+
+              // Update content to the most recent one
+              last.content = msg.content;
+              if (msg.activity?.supervisorThoughts) {
+                last.activity.supervisorThoughts = msg.activity.supervisorThoughts;
+              }
+              if (msg.activity?.agents) {
+                last.activity.agents.push(...msg.activity.agents);
+              }
+            } else {
+              grouped.push(msg);
+            }
+          }
+
+          setMessages(grouped);
         }
       } catch (e) {
         console.error("Failed to fetch history", e);
@@ -804,7 +836,7 @@ export default function NewChat() {
 
             setReviewMode(null);
             setReviewText("");
-            continue;
+            break; // Break the stream loop on interrupt to avoid read errors
           }
 
           if (ev === "error") {
@@ -861,7 +893,14 @@ export default function NewChat() {
       if (!aborted) {
         console.warn(e);
         setMessages((prev) =>
-          prev.map((m) => (m.id === attachToAssistantId ? { ...m, content: "⚠️ Something went wrong while streaming." } : m))
+          prev.map((m) => {
+            // Only show streaming error if there is no interrupt or response content.
+            // On interrupt, the backend closes the stream, so connection errors are expected.
+            if (m.id === attachToAssistantId && !m.interrupt && !m.content) {
+              return { ...m, content: "⚠️ Something went wrong while streaming." };
+            }
+            return m;
+          })
         );
       }
     } finally {

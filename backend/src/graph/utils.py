@@ -46,30 +46,36 @@ def extract_last_tool_call(messages):
 def strip_tool_calls(history: list) -> list:
     """
     Ensures history is valid for OpenAI by removing tool_calls metadata 
-    from AIMessages, unless they are followed by ToolMessages. 
+    from AIMessages, unless they are followed by ALL corresponding ToolMessages. 
     """
     cleaned = []
     for i, m in enumerate(history):
         if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
-            # Check if this AI message is followed by a matching ToolMessage
-            is_paired = False
-            if i + 1 < len(history) and isinstance(history[i+1], ToolMessage):
-                # Handle both dict-like and object-like ToolCalls
-                tc_ids = []
-                for tc in m.tool_calls:
-                    if isinstance(tc, dict):
-                        tc_ids.append(tc.get("id"))
-                    else:
-                        tc_ids.append(getattr(tc, "id", None))
-                
-                if history[i+1].tool_call_id in tc_ids:
-                    is_paired = True
+            # 1. Collect all tool call IDs from this message
+            tc_ids = []
+            for tc in m.tool_calls:
+                if isinstance(tc, dict):
+                    tc_ids.append(tc.get("id"))
+                else:
+                    tc_ids.append(getattr(tc, "id", None))
             
-            if not is_paired:
+            tc_ids_set = set(tc_ids)
+            
+            # 2. Check if the following messages are ToolMessages for THESE IDs
+            matched_ids = set()
+            j = i + 1
+            while j < len(history) and isinstance(history[j], ToolMessage):
+                if history[j].tool_call_id in tc_ids_set:
+                    matched_ids.add(history[j].tool_call_id)
+                j += 1
+            
+            # 3. Only keep tool_calls if ALL were responded to consecutively
+            if tc_ids_set == matched_ids:
+                cleaned.append(m)
+            else:
                 # Strip metadata to avoid OpenAI 400
                 content = m.content
                 if not content or not content.strip():
-                    # Fallback: OpenAI requires either content or tool_calls
                     content = "[Delegating to sub-agent...]"
                 
                 new_m = AIMessage(
@@ -78,8 +84,6 @@ def strip_tool_calls(history: list) -> list:
                     id=getattr(m, "id", None)
                 )
                 cleaned.append(new_m)
-            else:
-                cleaned.append(m)
         else:
             cleaned.append(m)
     return cleaned

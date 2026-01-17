@@ -28,27 +28,30 @@ def _get_agent_inputs(state: MultiAgentState, history_key: str):
     history = state.get(history_key, [])
     all_messages = state.get("messages", [])
 
-    # 🛑 CRITICAL FIX: 
-    # If the agent's internal history ALREADY ends with a ToolMessage (e.g. injected by Reviewer),
-    # we must NOT append anything else. The Agent has what it needs to continue.
+    # 1. If history already ends with ToolMessage, just clean and return
     if history and isinstance(history[-1], ToolMessage):
-        return history
+        return strip_tool_calls(history)
 
-    # 1. Check if the global stream ended with ToolMessages (Parallel Execution)
-    recent_tool_messages = []
-    for msg in reversed(all_messages):
-        if isinstance(msg, ToolMessage):
-            # Check if this specific tool message is already in history to avoid duplication
-            if history and history[-1] == msg:
-                break
-            recent_tool_messages.insert(0, msg)
-        else:
-            break
-            
-    # 2. If we found NEW tool results, append them
-    if recent_tool_messages:
-        return strip_tool_calls(history + recent_tool_messages)
-    
+    # 2. Check if history ends with AIMessage having tool_calls that are answered in all_messages
+    if history and isinstance(history[-1], AIMessage) and getattr(history[-1], "tool_calls", None):
+        tc_ids = set()
+        for tc in history[-1].tool_calls:
+            if isinstance(tc, dict):
+                tc_ids.add(tc.get("id"))
+            else:
+                tc_ids.add(getattr(tc, "id", None))
+        
+        # Look for these tool results in the global stream
+        found_tool_messages = [m for m in all_messages if isinstance(m, ToolMessage) and m.tool_call_id in tc_ids]
+        
+        # If we found at least one response in global but not yet in local history, add them
+        if found_tool_messages:
+            # Avoid duplicating messages already in history
+            existing_ids = {m.tool_call_id for m in history if isinstance(m, ToolMessage)}
+            new_tool_msgs = [m for m in found_tool_messages if m.tool_call_id not in existing_ids]
+            if new_tool_msgs:
+                return strip_tool_calls(history + new_tool_msgs)
+
     # 3. Otherwise, it's a standard message (User or Supervisor)
     next_msg = state.get("message_to_next_agent")
     if not next_msg:

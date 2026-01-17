@@ -199,7 +199,8 @@ async def audio_transcribe(
             resp = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f,
-                language=language,  # IMPORTANT: pass "en" to force English
+                language=language,
+                prompt="Transcribe the audio exactly in the language spoken. If English is spoken, transcribe in English. If Arabic is spoken, transcribe in Arabic. Do not translate.",
             )
 
         text = getattr(resp, "text", None) or ""
