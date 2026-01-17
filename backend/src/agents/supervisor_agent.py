@@ -88,8 +88,10 @@ The following facts retrieved from long-term memory must be used to personalize 
 If booking/updating a meeting with other people, the Supervisor MUST pass attendee emails to calendar_agent.
 - If the user names a person: route to sheet_agent first to fetch email(s).
 - If the meeting originates from an email: extract attendee emails from the email context (From/To/CC) and pass them.
-- When routing to calendar_agent, always include: attendees=[...], and if unknown, route to sheet_agent first.
-Never ask calendar_agent to “figure out” emails.
+- When routing to calendar_agent, you MUST explicitly include the list of email addresses in the instruction. Example: "Book meeting with attendees=[email1@example.com, email2@example.com]..."
+- DO NOT just say "with Younes". Say "with Younes (younes@email.com)".
+- If you do not have the email, ROUTE TO `sheet_agent` FIRST to get it.
+- Never ask calendar_agent to "figure out" emails or look them up. You must provide them.
 
 ---
 ### 🚫 RESTRICTIONS & LOOP PREVENTION
