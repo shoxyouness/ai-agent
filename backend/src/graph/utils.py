@@ -97,7 +97,8 @@ def filter_supervisor_history(messages: list, limit: int = 20) -> list:
     for msg in reversed(messages):
         # 1. Keep Human Messages (EXCLUDE internal review feedback)
         if isinstance(msg, HumanMessage):
-            if getattr(msg, "name", "") != "review_human":
+            name = (getattr(msg, "name", "") or "").lower()
+            if name != "review_human":
                 raw_filtered.insert(0, msg)
         
         # 2. Keep AI Messages (Strictly Supervisor or Summary)

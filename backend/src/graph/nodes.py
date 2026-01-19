@@ -334,7 +334,14 @@ def clear_sub_agents_state(state: MultiAgentState):
 
     # Helper to extract the last Tool Result
     def get_tool_results_text(history):
-        results = [m.content for m in reversed(history) if isinstance(m, ToolMessage)]
+        results = []
+        for m in reversed(history):
+            if isinstance(m, ToolMessage):
+                # Filter out human review feedback so Supervisor doesn't see it
+                content = str(m.content)
+                if "User rejected draft" not in content:
+                    results.append(content)
+        
         if results:
             return " | ".join(results)
         return None
