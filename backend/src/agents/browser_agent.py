@@ -20,7 +20,7 @@ async def run_browser_task(task: str) -> str:
         browser = Browser(headless=False)
     try:
         agent = Agent(
-            task=task,
+            task=task + " IMPORTANT: You must THINK and RESPOND in the language of the user's request.",
             llm=llm,
             browser=browser,
         )

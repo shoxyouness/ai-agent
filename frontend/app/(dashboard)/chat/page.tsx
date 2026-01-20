@@ -216,7 +216,11 @@ function AgentCard({ name, tools, preview }: { name: string; tools: string[]; pr
             </div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {tools.length === 0 ? (
-                <span className="text-[11px] text-neutral-500/80 dark:text-neutral-400/80">Silent Process</span>
+                preview ? (
+                  <ToolChip label="Message" />
+                ) : (
+                  <span className="text-[11px] text-neutral-500/80 dark:text-neutral-400/80">Silent Process</span>
+                )
               ) : (
                 tools.map((t) => <ToolChip key={t} label={toolLabel(t)} />)
               )}
@@ -642,7 +646,7 @@ export default function NewChat() {
     const finalizeAgentIfNeeded = (agent: string) => {
       if (!agent || agent === "supervisor") return;
       const st = ensureAgent(agent);
-      if (!st.usedTool) return;
+      // Removed !st.usedTool check to allow text-only agents
       if (!st.finalized) {
         st.previewFinal = makeAgentPreview(st.buffer);
         st.finalized = true;
@@ -653,8 +657,11 @@ export default function NewChat() {
       const agents: AgentActivity[] = [];
       for (const a of agentOrder) {
         const st = agentState.get(a);
-        if (!st || !st.usedTool) continue;
+        if (!st) continue;
         const preview = st.finalized ? st.previewFinal : makeAgentPreview(st.buffer);
+        // We only skip if there's absolutely no content and no tools
+        if (!preview && st.tools.size === 0) continue;
+
         agents.push({ agent: st.agent, tools: Array.from(st.tools), preview });
       }
 
@@ -757,7 +764,12 @@ export default function NewChat() {
               setAssistantContent("");
               rebuildActivity();
             } else {
-              ensureAgent(agent).started = true;
+              const st = ensureAgent(agent);
+              st.started = true;
+              // Add to order immediately so it shows up even if no tools are used
+              if (!agentOrder.includes(agent)) {
+                agentOrder.push(agent);
+              }
               inFinalSupervisorWindow = false;
             }
             continue;
@@ -777,10 +789,9 @@ export default function NewChat() {
               processSteps.push(`Supervisor used tool "${toolLabel(tool)}"`);
             } else {
               const st = ensureAgent(agent);
-              const before = st.tools.size;
               st.tools.add(tool);
               st.usedTool = true;
-              if (before === 0) agentOrder.push(agent);
+              if (!agentOrder.includes(agent)) agentOrder.push(agent);
 
               processSteps.push(`${prettyAgentName(agent)} used tool "${toolLabel(tool)}"`);
               rebuildActivity();
@@ -812,7 +823,7 @@ export default function NewChat() {
 
             if (agent && agent !== "supervisor") {
               const st = ensureAgent(agent);
-              if (!st.usedTool) continue;
+              // Removed !st.usedTool check to allow capturing text logic
               st.buffer = (st.buffer + t).slice(-8000);
               if (st.buffer.length % 400 < 40) rebuildActivity();
             }

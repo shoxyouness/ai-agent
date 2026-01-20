@@ -189,9 +189,26 @@ async def call_reviewer_agent(state: MultiAgentState):
     if state.get("bulk_approval_active") is True:
         return {"review_decision": "approved"}
 
-    pending = state.get("pending_email_tool_call") or extract_last_tool_call(state.get("messages", []))
+    # Fix: Scan ALL tool calls, not just the last one, to ensure we don't miss a sensitive action mixed with others.
+    last_msg = state.get("messages", [])[-1]
+    tool_calls = getattr(last_msg, "tool_calls", []) or []
     
-    if not pending or (pending.get("name") or "").lower() not in SENSITIVE_EMAIL_TOOLS:
+    pending = None
+    for tc in tool_calls:
+        # Normalize to dict
+        if isinstance(tc, dict):
+            tc_data = tc
+        else:
+            tc_data = {"name": getattr(tc, "name", ""), "args": getattr(tc, "args", {}), "id": getattr(tc, "id", "")}
+        
+        if (tc_data.get("name") or "").lower() in SENSITIVE_EMAIL_TOOLS:
+            pending = tc_data
+            break # Stop at the first sensitive tool found
+    
+    # If explicit pending state exists (from previous interrupt), use that
+    pending = state.get("pending_email_tool_call") or pending
+    
+    if not pending:
         return {"review_decision": None}
 
     tool_name = (pending["name"] or "").lower()

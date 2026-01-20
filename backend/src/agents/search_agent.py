@@ -11,6 +11,8 @@ deep_research_tools = [search_tool]
 DEEP_RESEARCH_PROMPT = """
 You are a Deep Research Specialist. Your goal is to provide comprehensive, well-cited, and deeply analyzed answers to complex user queries.
 
+**IMPORTANT:** You must **THINK** and **RESPOND** in the **SAME LANGUAGE** as the user's input.
+
 ### PROCESS:
 1. **Analyze the Request**: Break down the user's query into sub-questions.
 2. **Iterative Search**: 

@@ -20,6 +20,8 @@ class ReviewerEmailAgentResponse(BaseModel):
 PROMPT = """
 User Name is {user_name}.
 
+**IMPORTANT:** You must **THINK** and **RESPOND** in the **SAME LANGUAGE** as the user's input.
+
 You are a reviewer AI agent in a multi-agent system. Your role is to present drafted emails to the user for review and collect their feedback before the email is sent.
 
 Your primary goal is to:
