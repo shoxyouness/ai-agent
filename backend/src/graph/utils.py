@@ -43,15 +43,73 @@ def extract_last_tool_call(messages):
     }
 
 
-def strip_tool_calls(history):
-    """Remove AI messages with tool_calls to avoid OpenAI 400 during rewrite."""
+def strip_tool_calls(history: list) -> list:
+    """
+    Ensures history is valid for OpenAI by removing tool_calls metadata 
+    from AIMessages, unless they are followed by ALL corresponding ToolMessages. 
+    """
     cleaned = []
-    for m in history:
+    for i, m in enumerate(history):
         if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
-            # drop it (it's an unfulfilled tool call)
-            continue
-        if isinstance(m, ToolMessage):
-            # also drop tool messages if you dropped their call (optional)
-            continue
-        cleaned.append(m)
+            # 1. Collect all tool call IDs from this message
+            tc_ids = []
+            for tc in m.tool_calls:
+                if isinstance(tc, dict):
+                    tc_ids.append(tc.get("id"))
+                else:
+                    tc_ids.append(getattr(tc, "id", None))
+            
+            tc_ids_set = set(tc_ids)
+            
+            # 2. Check if the following messages are ToolMessages for THESE IDs
+            matched_ids = set()
+            j = i + 1
+            while j < len(history) and isinstance(history[j], ToolMessage):
+                if history[j].tool_call_id in tc_ids_set:
+                    matched_ids.add(history[j].tool_call_id)
+                j += 1
+            
+            # 3. Only keep tool_calls if ALL were responded to consecutively
+            if tc_ids_set == matched_ids:
+                cleaned.append(m)
+            else:
+                # Strip metadata to avoid OpenAI 400
+                content = m.content
+                if not content or not content.strip():
+                    content = "[Delegating to sub-agent...]"
+                
+                new_m = AIMessage(
+                    content=content,
+                    name=getattr(m, "name", None),
+                    id=getattr(m, "id", None)
+                )
+                cleaned.append(new_m)
+        else:
+            cleaned.append(m)
     return cleaned
+
+def filter_supervisor_history(messages: list, limit: int = 20) -> list:
+    """
+    Filters history for the Supervisor and cleans it.
+    """
+    raw_filtered = []
+    # Traverse backwards to get the most recent relevant messages first
+    for msg in reversed(messages):
+        # 1. Keep Human Messages (EXCLUDE internal review feedback)
+        if isinstance(msg, HumanMessage):
+            name = (getattr(msg, "name", "") or "").lower()
+            if name != "review_human":
+                raw_filtered.insert(0, msg)
+        
+        # 2. Keep AI Messages (Strictly Supervisor or Summary)
+        elif isinstance(msg, AIMessage):
+            name = (getattr(msg, "name", "") or "").lower()
+            if name in ("supervisor", "sub_agent_task_summary"):
+                raw_filtered.insert(0, msg)
+        
+        # Stop if we hit the limit
+        if len(raw_filtered) >= limit:
+            break
+            
+    # Always strip tool_calls from supervisor history as a final safety measure
+    return strip_tool_calls(raw_filtered)

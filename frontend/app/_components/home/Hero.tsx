@@ -1,5 +1,6 @@
+"use client";
 import React from "react";
-import Spline from "@splinetool/react-spline/next";
+import Spline from "@splinetool/react-spline";
 import { PointerHighlight } from "@/components/ui/pointer-highlight";
 import { FlipWords } from "@/components/ui/flip-words";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
@@ -11,7 +12,12 @@ import Link from "next/link";
 import HomeNavbar from "./Nav";
 
 const HomeHero = () => {
-  const words = ["better", "cute", "beautiful", "modern"];
+  const [mounted, setMounted] = React.useState(false);
+  const words = ["emails", "meetings", "searchs", "workflows"];
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
 
   return (
     <div className="fixed w-screen h-screen">
@@ -25,7 +31,7 @@ const HomeHero = () => {
               )}
             >
               <AnimatedShinyText className="inline-flex items-center justify-center pl-6 pr-8 py-1 text-3xl transition ease-out  rounded-4xl ">
-                <span>✨ Introducing</span>
+                <span>✨ Meet your personal AI agent</span>
               </AnimatedShinyText>
             </div>
           </div> */}
@@ -45,28 +51,26 @@ const HomeHero = () => {
             />
 
             <AnimatedGradientText className="text-3xl font-medium">
-              <span>✨ Introducing</span>
+              <span>✨ Meet your personal AI agent</span>
             </AnimatedGradientText>
           </div>
 
           <div className="max-w-4xl">
             <div className="text-6xl mx-auto font-bold text-neutral-600 uppercase">
-              Build
+              Your AI agent for
               <FlipWords words={words} /> <br />
-              websites with Aceternity UI
+              that actually gets things done
             </div>
           </div>
 
           <div className="max-w-3xl text-neutral-500">
             <span>
-              lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum
-              dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit
-              amet
+              Tell it what you need — it handles emails, scheduling, and contact management in seconds.
             </span>
           </div>
 
           <div className="flex items-center justify-start gap-6">
-            <Link href="/docs">
+            <Link href="https://github.com/shoxyouness/ai-agent">
               <div className=" flex  items-center justify-start">
                 <div
                   className={cn(
@@ -74,13 +78,13 @@ const HomeHero = () => {
                   )}
                 >
                   <AnimatedShinyText className="inline-flex items-center justify-center pl-6 pr-8 py-3 text-lg  transition ease-out  rounded-4xl ">
-                    <span>Documentation</span>
+                    <span>Read the Docs</span>
                   </AnimatedShinyText>
                 </div>
               </div>
             </Link>
 
-            <Link href="/dashboard/chat" className="flex justify-center">
+            <Link href="/chat" className="flex justify-center">
               <NoiseBackground
                 containerClassName="w-fit p-2 rounded-full mx-auto"
                 gradientColors={[
@@ -98,7 +102,12 @@ const HomeHero = () => {
         </div>
       </div>
       <div className="w-full h-[110vh]">
-        <Spline scene="https://prod.spline.design/NNMwqWnw6qzKOHwR/scene.splinecode" />{" "}
+        {mounted && (
+          <Spline
+            scene="https://prod.spline.design/NNMwqWnw6qzKOHwR/scene.splinecode"
+            onError={(e) => console.error("Spline Error:", e)}
+          />
+        )}
       </div>
     </div>
   );

@@ -1,11 +1,16 @@
 # backend/src/api.py
 import os
+from dotenv import load_dotenv
+
+load_dotenv() # Load environment variables early
+
 import json
 import tempfile
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -14,7 +19,10 @@ from langchain_core.messages import HumanMessage, AIMessageChunk
 from langgraph.types import Command
 
 from src.graph.workflow import build_graph
+from src.graph.workflow import build_graph
 from src.config.memory_config import get_memory_instance
+from src.database import create_db_and_tables, add_message, get_messages, clear_messages
+from src.utils.audio_utils import tts_to_file
 
 from openai import OpenAI
 
@@ -23,6 +31,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    create_db_and_tables()
     app.state.memory = get_memory_instance()
     yield
 
@@ -46,6 +55,10 @@ class ChatRequest(BaseModel):
     resume_action: Optional[str] = None
 
 
+class TTSRequest(BaseModel):
+    text: str
+
+
 async def stream_generator(request: ChatRequest):
     thread_id = request.thread_id
     config = {"configurable": {"thread_id": thread_id}}
@@ -59,20 +72,47 @@ async def stream_generator(request: ChatRequest):
             "messages": [HumanMessage(content=request.message)],
             "core_messages": [HumanMessage(content=request.message)],
         }
+        # Save User Message
+        if request.message:
+            add_message(thread_id, "user", request.message)
 
     last_agent = None
+    full_response = ""
 
     try:
+        config["recursion_limit"] = 40
         async for msg, metadata in graph.astream(inputs, config, stream_mode="messages"):
             current_agent = metadata.get("langgraph_node", "unknown")
             if current_agent == "_read":
                 continue
 
             if current_agent != last_agent:
+                # Save previous agent's response if it was public
+                PUBLIC_AGENTS = ("supervisor", "email_agent", "calendar_agent", "sheet_agent", "browser_agent", "deep_research_agent")
+                if last_agent in PUBLIC_AGENTS and full_response.strip():
+                     # 🛑 CRITICAL: Parse Supervisor JSON to save only the response
+                     content_to_save = full_response
+                     if last_agent == "supervisor":
+                         try:
+                             # Find JSON boundaries
+                             start = full_response.find("{")
+                             end = full_response.rfind("}")
+                             if start != -1 and end != -1:
+                                 json_str = full_response[start:end+1]
+                                 parsed = json.loads(json_str)
+                                 if "response" in parsed:
+                                     content_to_save = parsed["response"]
+                         except:
+                             pass
+                     
+                     add_message(thread_id, "assistant", content_to_save)
+                
+                full_response = "" # Reset buffer for the new agent
                 yield {"event": "agent_start", "data": json.dumps({"agent": current_agent})}
                 last_agent = current_agent
 
             if isinstance(msg, AIMessageChunk) and msg.content:
+                full_response += msg.content
                 yield {"event": "token", "data": json.dumps({"agent": current_agent, "text": msg.content})}
 
             if hasattr(msg, "tool_calls") and msg.tool_calls:
@@ -89,6 +129,22 @@ async def stream_generator(request: ChatRequest):
                 interrupt_value = snapshot.tasks[0].interrupts[0].value
                 yield {"event": "interrupt", "data": json.dumps({"type": "review_required", "payload": str(interrupt_value)})}
         else:
+            # Save the VERY LAST agent's response if it was public
+            PUBLIC_AGENTS = ("supervisor", "email_agent", "calendar_agent", "sheet_agent", "browser_agent", "deep_research_agent")
+            if last_agent in PUBLIC_AGENTS and full_response.strip():
+                content_to_save = full_response
+                if last_agent == "supervisor":
+                    try:
+                        start = full_response.find("{")
+                        end = full_response.rfind("}")
+                        if start != -1 and end != -1:
+                            json_str = full_response[start:end+1]
+                            parsed = json.loads(json_str)
+                            if "response" in parsed:
+                                content_to_save = parsed["response"]
+                    except:
+                        pass
+                add_message(thread_id, "assistant", content_to_save)
             yield {"event": "done", "data": "success"}
 
     except Exception as e:
@@ -101,6 +157,17 @@ async def stream_generator(request: ChatRequest):
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     return EventSourceResponse(stream_generator(request))
+
+
+@app.get("/chat/history")
+def get_chat_history(thread_id: str = "default_thread"):
+    return get_messages(thread_id, limit=20)
+
+
+@app.post("/chat/clear")
+def clear_chat_history(request: ChatRequest):
+    clear_messages(request.thread_id)
+    return {"status": "success", "message": "History cleared"}
 
 
 @app.post("/audio/transcribe")
@@ -132,7 +199,8 @@ async def audio_transcribe(
             resp = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f,
-                language=language,  # IMPORTANT: pass "en" to force English
+                language=language,
+                prompt="Transcribe the audio exactly in the language spoken. If English is spoken, transcribe in English. If Arabic is spoken, transcribe in Arabic. Do not translate.",
             )
 
         text = getattr(resp, "text", None) or ""
@@ -148,6 +216,42 @@ async def audio_transcribe(
             os.remove(tmp_path)
         except Exception:
             pass
+
+
+@app.post("/audio/tts")
+async def audio_tts(request: TTSRequest):
+    """
+    Synthesize text to speech and return the MP3 file.
+    """
+    text = request.text
+    if not text:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="No text provided")
+
+    try:
+        # Generate a unique filename for the response
+        import uuid
+        # Ensure we use an absolute path or at least a safe one
+        # Use the same directory as defined in audio_utils if possible
+        from src.utils.audio_utils import AUDIO_OUTPUT_PATH
+        out_dir = os.path.dirname(os.path.abspath(AUDIO_OUTPUT_PATH))
+        out_path = os.path.join(out_dir, f"response_{uuid.uuid4().hex}.mp3")
+        
+        generated_path = tts_to_file(text, out_path=out_path)
+        
+        if not os.path.exists(generated_path):
+             from fastapi import HTTPException
+             raise HTTPException(status_code=500, detail="Audio file generation failed")
+
+        return FileResponse(
+            generated_path, 
+            media_type="audio/mpeg", 
+            filename="response.mp3"
+        )
+    except Exception as e:
+        print(f"❌ TTS error: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/health")

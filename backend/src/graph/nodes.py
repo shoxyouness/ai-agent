@@ -11,10 +11,13 @@ from src.agents import (
     run_browser_task, deep_research_agent
 )
 from src.graph.consts import SENSITIVE_EMAIL_TOOLS
-from src.graph.utils import get_last_human_message, extract_last_tool_call
-
-
-from src.graph.utils import extract_all_tool_calls # Import the new helper
+from src.graph.utils import (
+    get_last_human_message, 
+    extract_last_tool_call, 
+    extract_all_tool_calls, 
+    strip_tool_calls, 
+    filter_supervisor_history
+)
 
 # --- 1. Helper for Parallel Tool Handling (Fixes 400 Error) ---
 def _get_agent_inputs(state: MultiAgentState, history_key: str):
@@ -25,33 +28,36 @@ def _get_agent_inputs(state: MultiAgentState, history_key: str):
     history = state.get(history_key, [])
     all_messages = state.get("messages", [])
 
-    # 🛑 CRITICAL FIX: 
-    # If the agent's internal history ALREADY ends with a ToolMessage (e.g. injected by Reviewer),
-    # we must NOT append anything else. The Agent has what it needs to continue.
+    # 1. If history already ends with ToolMessage, just clean and return
     if history and isinstance(history[-1], ToolMessage):
-        return history
+        return strip_tool_calls(history)
 
-    # 1. Check if the global stream ended with ToolMessages (Parallel Execution)
-    recent_tool_messages = []
-    for msg in reversed(all_messages):
-        if isinstance(msg, ToolMessage):
-            # Check if this specific tool message is already in history to avoid duplication
-            if history and history[-1] == msg:
-                break
-            recent_tool_messages.insert(0, msg)
-        else:
-            break
-            
-    # 2. If we found NEW tool results, append them
-    if recent_tool_messages:
-        return history + recent_tool_messages
-    
+    # 2. Check if history ends with AIMessage having tool_calls that are answered in all_messages
+    if history and isinstance(history[-1], AIMessage) and getattr(history[-1], "tool_calls", None):
+        tc_ids = set()
+        for tc in history[-1].tool_calls:
+            if isinstance(tc, dict):
+                tc_ids.add(tc.get("id"))
+            else:
+                tc_ids.add(getattr(tc, "id", None))
+        
+        # Look for these tool results in the global stream
+        found_tool_messages = [m for m in all_messages if isinstance(m, ToolMessage) and m.tool_call_id in tc_ids]
+        
+        # If we found at least one response in global but not yet in local history, add them
+        if found_tool_messages:
+            # Avoid duplicating messages already in history
+            existing_ids = {m.tool_call_id for m in history if isinstance(m, ToolMessage)}
+            new_tool_msgs = [m for m in found_tool_messages if m.tool_call_id not in existing_ids]
+            if new_tool_msgs:
+                return strip_tool_calls(history + new_tool_msgs)
+
     # 3. Otherwise, it's a standard message (User or Supervisor)
     next_msg = state.get("message_to_next_agent")
     if not next_msg:
         next_msg = all_messages[-1] # Fallback to last global message
         
-    return history + [next_msg]
+    return strip_tool_calls(history + [next_msg])
 
 # def _get_agent_inputs(state: MultiAgentState, history_key: str):
 #     """
@@ -134,8 +140,9 @@ def retrieve_memory(state: MultiAgentState):
 
 async def call_supervisor(state: MultiAgentState):
     """Supervisor analyzes messages and decides next step."""
-    messages = state.get("core_messages") 
-    print(f"DEBUG: Supervisor seeing {len(messages)} messages.")
+    # Use filtered history: Human, Supervisor, and Summary messages only
+    messages = filter_supervisor_history(state.get("messages", []))
+    print(f"DEBUG: Supervisor seeing {len(messages)} filtered messages.")
 
     retrieved_memory_context = state.get("retrieved_memory", "No relevant Context found.")
 
@@ -182,9 +189,26 @@ async def call_reviewer_agent(state: MultiAgentState):
     if state.get("bulk_approval_active") is True:
         return {"review_decision": "approved"}
 
-    pending = state.get("pending_email_tool_call") or extract_last_tool_call(state.get("messages", []))
+    # Fix: Scan ALL tool calls, not just the last one, to ensure we don't miss a sensitive action mixed with others.
+    last_msg = state.get("messages", [])[-1]
+    tool_calls = getattr(last_msg, "tool_calls", []) or []
     
-    if not pending or (pending.get("name") or "").lower() not in SENSITIVE_EMAIL_TOOLS:
+    pending = None
+    for tc in tool_calls:
+        # Normalize to dict
+        if isinstance(tc, dict):
+            tc_data = tc
+        else:
+            tc_data = {"name": getattr(tc, "name", ""), "args": getattr(tc, "args", {}), "id": getattr(tc, "id", "")}
+        
+        if (tc_data.get("name") or "").lower() in SENSITIVE_EMAIL_TOOLS:
+            pending = tc_data
+            break # Stop at the first sensitive tool found
+    
+    # If explicit pending state exists (from previous interrupt), use that
+    pending = state.get("pending_email_tool_call") or pending
+    
+    if not pending:
         return {"review_decision": None}
 
     tool_name = (pending["name"] or "").lower()
@@ -206,14 +230,16 @@ async def call_reviewer_agent(state: MultiAgentState):
     human_text = interrupt(draft)
 
     # 3. Reviewer Agent Logic
-    review = await reviewer_agent.ainvoke([
+    review_history = [
         AIMessage(content=draft, name="reviewer_agent"),
-        HumanMessage(content=str(human_text)),
-    ])
+        HumanMessage(content=str(human_text), name="review_human"),
+    ]
+    review = await reviewer_agent.ainvoke(review_history)
     
     updates = {
         "review_decision": review.decision,
         "review_feedback": review.feedback,
+        "messages": [HumanMessage(content=str(human_text), name="review_human")],
         "core_messages": state["core_messages"] + [
             AIMessage(content=f"[REVIEW] {review.decision}\n{review.feedback}", name="reviewer_agent")
         ],
@@ -325,7 +351,14 @@ def clear_sub_agents_state(state: MultiAgentState):
 
     # Helper to extract the last Tool Result
     def get_tool_results_text(history):
-        results = [m.content for m in reversed(history) if isinstance(m, ToolMessage)]
+        results = []
+        for m in reversed(history):
+            if isinstance(m, ToolMessage):
+                # Filter out human review feedback so Supervisor doesn't see it
+                content = str(m.content)
+                if "User rejected draft" not in content:
+                    results.append(content)
+        
         if results:
             return " | ".join(results)
         return None
@@ -357,20 +390,29 @@ def clear_sub_agents_state(state: MultiAgentState):
     if state.get("research_agent_response"):
         summary_parts.append(f"Deep Research Agent Findings: {state['research_agent_response']}")
 
+    # Help identify the instruction that was just completed
+    last_inst = state.get("message_to_next_agent")
+    inst_text = last_inst.content if last_inst and hasattr(last_inst, 'content') else "Current user request"
+    
+    # Add a timestamp to distinguish reports chronologically
+    import datetime
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+
     # Create the detailed summary message
     if summary_parts:
         content = "\n".join(summary_parts)
         
         # AGGRESSIVE SYSTEM INSTRUCTION TO STOP LOOPS
         final_summary = (
-            "### SUBSYSTEM REPORT ###\n"
-            f"{content}\n"
+            f"### SUBSYSTEM REPORT ({ts}) ###\n"
+            f"**Instruction Addressed:** {inst_text}\n"
+            f"**Details:**\n{content}\n"
             "------------------------\n"
             "⚠️ SYSTEM INSTRUCTION TO SUPERVISOR:\n"
-            "1. Analyze the 'ACTION COMPLETED' lines above.\n"
-            "2. If an action (like canceling meetings or sending email) is marked ✅, IT IS DONE.\n"
-            "3. DO NOT route back to the agent to do it again.\n"
-            "4. Proceed to the next step or finish."
+            "1. The instruction listed above is now 100% COMPLETE.\n"
+            "2. ANY human feedback or change requests seen earlier in the history HAVE BEEN FULLY INCORPORATED into this result.\n"
+            "3. If an action is marked ✅, IT IS DONE. DO NOT route back to the agent for this specific instruction again.\n"
+            "4. Proceed to the next objective or provide the final response."
         )
         
         summary_message = AIMessage(
@@ -380,11 +422,20 @@ def clear_sub_agents_state(state: MultiAgentState):
         core.append(summary_message)
 
     return {
+        "messages": [summary_message] if summary_parts else [],
         "core_messages": core,
         "email_messages": [],
         "calendar_messages": [],
         "sheet_messages": [],
+        "email_agent_response": None,
+        "calendar_agent_response": None,
+        "sheet_agent_response": None,
+        "browser_agent_response": None,
+        "research_agent_response": None,
         "message_to_next_agent": None,
+        "review_decision": None,
+        "review_feedback": None,
+        "pending_email_tool_call": None,
         "bulk_approval_active": False 
     }
 
